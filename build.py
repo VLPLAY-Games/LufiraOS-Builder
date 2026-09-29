@@ -58,18 +58,18 @@ def do_build(args) -> config.BuildConfig:
     print("=== Compiling host tools (mkfs_lufirafs, lpg_pack) ===")
     host_tools = tools.compile_host_tools(cfg.lufira_repo, cfg.out_dir)
 
-    # v0.7 план, этап 4: базовые user-программы едут в образ через .lpg +
-    # install_packages(), а не прямым put'ом — direct-stage остаётся только
-    # для userspace/base (dlpg сам себя пакетом не ставит, курица-и-яйцо).
+    # v0.7 план, этап 4 (user) + этап 5, под-этапы 1 и 5 (base, включая
+    # dlpg): всё едет в образ через .lpg + install_packages(), а не прямым
+    # put'ом — с под-этапа 5 direct-stage не нужен вообще ни для чего
+    # (см. комментарий у DEFAULT_BASE_PACKAGES в config.py).
     if cfg.install_default_packages:
-        print("=== Packing default user packages (du/df/free/cpuload) ===")
-        default_lpgs = packages.build_default_packages(cfg, host_tools["lpg_pack"])
+        print("=== Packing default packages (du/df/free/cpuload, cp/mv/ls/mkdir/rm/kill/ps/dlpg) ===")
+        default_lpgs = packages.build_packages(
+            cfg, host_tools["lpg_pack"], config.DEFAULT_USER_PACKAGES + config.DEFAULT_BASE_PACKAGES)
         cfg.packages = [str(p) for p in default_lpgs] + cfg.packages
 
-    base_elf_files = sorted(str(p) for p in (cfg.lufira_repo / "userspace" / "base").glob("**/*.elf"))
-
     print("=== Assembling disk image ===")
-    disk_img = image.assemble(cfg, host_tools["mkfs_lufirafs"], bootx64_efi, kernel_bin, base_elf_files)
+    disk_img = image.assemble(cfg, host_tools["mkfs_lufirafs"], bootx64_efi, kernel_bin)
     print(f"disk image created: {disk_img}")
     return cfg
 

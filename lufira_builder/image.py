@@ -39,20 +39,19 @@ def build_esp(cfg: config.BuildConfig, bootx64_efi: Path, kernel_bin: Path) -> N
     esp_img.unlink()
 
 
-def populate_lufirafs(cfg: config.BuildConfig, mkfs_bin: Path, direct_stage_elf_files: list) -> None:
-    """direct_stage_elf_files — программы, кладущиеся в /bin напрямую, минуя
-    .lpg (сейчас только userspace/base/dlpg.elf — сам себя пакетом не
-    ставит). Всё остальное (v0.7 план, этап 4: du/df/free/cpuload) идёт
-    через install_packages() ниже.
+def populate_lufirafs(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
+    """Каталоги + сид-файлы. Все программы (включая dlpg — v0.7 план, этап
+    5, под-этап 5) едут через install_packages() ниже; direct-stage больше
+    не нужен ни для чего — install_packages() это чистый Python в этом
+    репозитории, а не запуск dlpg на госте, так что "dlpg не может
+    установить сам себя" никогда не было настоящим ограничением ЭТОГО
+    пайплайна, только гипотетическим для реального dlpg на реальном diske.
     """
     image = cfg.disk_img
     mkfs(mkfs_bin, "format", image, cfg)
 
     for d in config.DEFAULT_DIRS:
         mkfs(mkfs_bin, "mkdir", image, cfg, d)
-
-    for f in direct_stage_elf_files:
-        mkfs(mkfs_bin, "put", image, cfg, f, f"/bin/{Path(f).name}", "755")
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
         tf.write(config.DEFAULT_README_CONTENT)
@@ -106,11 +105,10 @@ def install_packages(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
     Path(db_tmp).unlink()
 
 
-def assemble(cfg: config.BuildConfig, mkfs_bin: Path, bootx64_efi: Path, kernel_bin: Path,
-             direct_stage_elf_files: list) -> Path:
+def assemble(cfg: config.BuildConfig, mkfs_bin: Path, bootx64_efi: Path, kernel_bin: Path) -> Path:
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     build_esp(cfg, bootx64_efi, kernel_bin)
-    populate_lufirafs(cfg, mkfs_bin, direct_stage_elf_files)
+    populate_lufirafs(cfg, mkfs_bin)
     install_packages(cfg, mkfs_bin)
     _run(["sync"])
     return cfg.disk_img

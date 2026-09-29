@@ -15,19 +15,20 @@ def _run(cmd) -> None:
     subprocess.run(cmd, check=True)
 
 
-def build_default_packages(cfg: config.BuildConfig, lpg_pack_bin: Path) -> list:
-    """Возвращает список путей к собранным .lpg для DEFAULT_USER_PACKAGES."""
+def build_packages(cfg: config.BuildConfig, lpg_pack_bin: Path, package_specs: list) -> list:
+    """Пакует список описаний (см. config.DEFAULT_USER_PACKAGES/
+    DEFAULT_BASE_PACKAGES) в .lpg, возвращает пути к собранным файлам."""
     pkg_dir = cfg.out_dir / "packages"
     pkg_dir.mkdir(parents=True, exist_ok=True)
 
     lpg_paths = []
-    for pkg in config.DEFAULT_USER_PACKAGES:
+    for pkg in package_specs:
         elf_src = cfg.lufira_repo / pkg["elf"]
         dest = f"/bin/{Path(pkg['elf']).name}"
         manifest = (
             f"name={pkg['name']}\n"
             f"version={pkg['version']}\n"
-            "category=user\n"
+            f"category={pkg['category']}\n"
             "depends=\n"
             "[files]\n"
             f"{elf_src} {dest} 755\n"

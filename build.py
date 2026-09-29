@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lufira_builder import config, image, qemu, tools
+from lufira_builder import config, image, packages, qemu, tools
 
 
 def add_common_args(p: argparse.ArgumentParser) -> None:
@@ -25,17 +25,20 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    help="каталог для disk.img и промежуточных файлов")
     p.add_argument("--package", action="append", dest="packages", default=[],
                    metavar="PATH.lpg",
-                   help="установить .lpg-пакет во время сборки образа (можно несколько раз)")
+                   help="установить дополнительный .lpg-пакет во время сборки образа (можно несколько раз)")
     p.add_argument("--no-build-kernel", action="store_false", dest="build_kernel",
                    help="не запускать `make kernel bootloader` в LufiraOS, взять уже собранные файлы")
+    p.add_argument("--no-default-packages", action="store_false", dest="install_default_packages",
+                   help="не упаковывать/не ставить du/df/free/cpuload (config.DEFAULT_USER_PACKAGES)")
 
 
 def make_config(args) -> config.BuildConfig:
     return config.BuildConfig(
         lufira_repo=args.lufira_repo,
         out_dir=args.out_dir,
-        packages=args.packages,
+        packages=list(args.packages),
         build_kernel=args.build_kernel,
+        install_default_packages=args.install_default_packages,
     )
 
 
@@ -55,10 +58,18 @@ def do_build(args) -> config.BuildConfig:
     print("=== Compiling host tools (mkfs_lufirafs, lpg_pack) ===")
     host_tools = tools.compile_host_tools(cfg.lufira_repo, cfg.out_dir)
 
-    userspace_elf_files = sorted(str(p) for p in (cfg.lufira_repo / "userspace").glob("**/*.elf"))
+    # v0.7 план, этап 4: базовые user-программы едут в образ через .lpg +
+    # install_packages(), а не прямым put'ом — direct-stage остаётся только
+    # для userspace/base (dlpg сам себя пакетом не ставит, курица-и-яйцо).
+    if cfg.install_default_packages:
+        print("=== Packing default user packages (du/df/free/cpuload) ===")
+        default_lpgs = packages.build_default_packages(cfg, host_tools["lpg_pack"])
+        cfg.packages = [str(p) for p in default_lpgs] + cfg.packages
+
+    base_elf_files = sorted(str(p) for p in (cfg.lufira_repo / "userspace" / "base").glob("**/*.elf"))
 
     print("=== Assembling disk image ===")
-    disk_img = image.assemble(cfg, host_tools["mkfs_lufirafs"], bootx64_efi, kernel_bin, userspace_elf_files)
+    disk_img = image.assemble(cfg, host_tools["mkfs_lufirafs"], bootx64_efi, kernel_bin, base_elf_files)
     print(f"disk image created: {disk_img}")
     return cfg
 

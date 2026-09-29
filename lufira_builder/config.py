@@ -28,6 +28,19 @@ DEFAULT_SEED_GROUP = "tools/seed/group"
 
 BIOS_PATH = "/usr/share/ovmf/OVMF.fd"
 
+# v0.7 план, этап 4: du/df/free/cpuload (уже отдельные ELF с этапа 1)
+# ставятся в образ через .lpg + install_packages(), а не прямым put'ом —
+# первая сквозная проверка пайплайна "упаковка -> установка во время сборки
+# образа". Без зависимостей, категория user — сама разбивка на пакеты
+# осталась внутри LufiraOS-Builder (lufira-packages с base/user появится
+# только на этапе 6, пока не создаём его прежде времени).
+DEFAULT_USER_PACKAGES = [
+    {"name": "du", "version": "1.0.0", "elf": "userspace/user/du.elf"},
+    {"name": "df", "version": "1.0.0", "elf": "userspace/user/df.elf"},
+    {"name": "free", "version": "1.0.0", "elf": "userspace/user/free.elf"},
+    {"name": "cpuload", "version": "1.0.0", "elf": "userspace/user/cpuload.elf"},
+]
+
 
 @dataclass
 class BuildConfig:
@@ -37,6 +50,7 @@ class BuildConfig:
     esp_size: int = ESP_SIZE
     packages: list = field(default_factory=list)  # список путей к .lpg
     build_kernel: bool = True
+    install_default_packages: bool = True
 
     @property
     def region_size(self) -> int:

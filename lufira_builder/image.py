@@ -1,9 +1,9 @@
-"""Сборка disk.img: ESP (FAT12, bootloader+kernel.bin) + LufiraFS-регион
-(seed-файлы, userspace-программы, .lpg-пакеты).
+"""Assembles disk.img: the ESP (FAT12, bootloader+kernel.bin) + the
+LufiraFS region (seed files, userspace programs, .lpg packages).
 
-Раньше вся эта логика жила в LufiraOS/Makefile — v0.7 план, этап 3, шаг 3.0
-переносит её сюда целиком, разрезая исходный Makefile на "только
-kernel.bin + загрузчик".
+All of this logic used to live in LufiraOS/Makefile — v0.7 plan, stage 3,
+step 3.0 moves it here entirely, cutting the original Makefile down to
+"just kernel.bin + the bootloader".
 """
 
 import subprocess
@@ -40,12 +40,19 @@ def build_esp(cfg: config.BuildConfig, bootx64_efi: Path, kernel_bin: Path) -> N
 
 
 def populate_lufirafs(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
-    """Каталоги + сид-файлы. Все программы (включая dlpg — v0.7 план, этап
-    5, под-этап 5) едут через install_packages() ниже; direct-stage больше
-    не нужен ни для чего — install_packages() это чистый Python в этом
-    репозитории, а не запуск dlpg на госте, так что "dlpg не может
-    установить сам себя" никогда не было настоящим ограничением ЭТОГО
-    пайплайна, только гипотетическим для реального dlpg на реальном diske.
+    """Directories + seed files + /bin/shell.elf. All OTHER programs
+    (including dlpg — v0.7 plan, stage 5, sub-stage 5) go through
+    install_packages() below; install_packages() is plain Python in this
+    repository, not something run on the guest, so "can't install itself"
+    was never a real constraint of THIS pipeline.
+    shell.elf is the one deliberate exception: it's not a "package" in the
+    dlpg sense (dlpg will never see it in /etc/packages/installed and can't
+    "remove" it — which would be fatal, since the kernel loads exactly this
+    file directly from a fixed path on every boot/respawn, see
+    spawn_shell_process() in kernel/kernel.c, v0.7 plan, stage 5, sub-stage 6).
+    Its source lives in lufira-packages' shell/ folder now (not base/ or
+    user/ — still not a dlpg package), built by that repo's own build.py
+    alongside the other packages; see config.SHELL_ELF_PATH.
     """
     image = cfg.disk_img
     mkfs(mkfs_bin, "format", image, cfg)
@@ -64,11 +71,14 @@ def populate_lufirafs(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
     mkfs(mkfs_bin, "put", image, cfg,
          cfg.lufira_repo / config.DEFAULT_SEED_GROUP, "/etc/group")
 
+    mkfs(mkfs_bin, "put", image, cfg,
+         cfg.lufira_packages_repo / config.SHELL_ELF_PATH, "/bin/shell.elf", "755")
+
 
 def install_packages(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
-    """Устанавливает cfg.packages в собираемый образ той же логикой, что и
-    dlpg install (см. lpg.plan_install) — но пишет файлы напрямую через
-    mkfs_lufirafs put, без работающей ОС.
+    """Installs cfg.packages into the image being built, using the same
+    logic as dlpg install (see lpg.plan_install) — but writes files
+    directly via mkfs_lufirafs put, with no running OS involved.
     """
     if not cfg.packages:
         return

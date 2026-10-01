@@ -1,8 +1,8 @@
-"""Разбор .lpg (tools/lpg_format.h из LufiraOS) и симуляция установки пакета
-на этапе сборки образа — те же правила, что и у userspace/base/dlpg.c
-(проверка зависимостей ДО распаковки, тот же текстовый формат БД
-/etc/packages/installed и receipt-файлов /etc/packages/<name>.files),
-только выполняются на хосте в Python, а не внутри работающей ОС.
+"""Parses .lpg (tools/lpg_format.h from LufiraOS) and simulates package
+installation at image-build time — the same rules as userspace/base/dlpg.c
+(dependency check BEFORE unpacking, the same text format for the
+/etc/packages/installed DB and the /etc/packages/<name>.files receipts),
+just carried out on the host in Python instead of inside a running OS.
 """
 
 import struct
@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 
 MAGIC = b"LPG1"
 
-# '<' — без выравнивания, зеркалит __attribute__((packed)) структур в
-# tools/lpg_format.h побайтово.
+# '<' — no alignment, mirrors the __attribute__((packed)) structs in
+# tools/lpg_format.h byte-for-byte.
 _HEADER_FMT = "<4s32sHHHBBII"
 _HEADER_SIZE = struct.calcsize(_HEADER_FMT)  # 52
 _DEP_FMT = "<32sHHH"
@@ -118,11 +118,11 @@ class InstallPlan:
     category: int
     files: list  # [(dest_path, data, mode)]
     receipt_text: str
-    installed_after: list  # обновлённый список InstalledEntry
+    installed_after: list  # the updated list of InstalledEntry
 
 
 def plan_install(pkg: LpgPackage, installed: list, allow_existing: bool) -> InstallPlan:
-    """Повторяет do_install() из dlpg.c: сначала зависимости, потом файлы."""
+    """Mirrors do_install() from dlpg.c: dependencies first, then files."""
     by_name = {e.name: e for e in installed}
 
     existing = by_name.get(pkg.name)

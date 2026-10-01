@@ -1,5 +1,5 @@
-"""Запуск QEMU над собранным disk.img — раньше это были таргеты run/debug/
-monitor в LufiraOS/Makefile, теперь целиком здесь (v0.7 план, этап 3).
+"""Launches QEMU on top of the assembled disk.img — previously the run/debug/
+monitor targets in LufiraOS/Makefile, now entirely here (v0.7 plan, stage 3).
 """
 
 import subprocess
@@ -55,14 +55,16 @@ def _build_usbstick_with_test_file(cfg: config.BuildConfig) -> None:
     Path(host_test).unlink()
 
 
-def qemu_debug(cfg: config.BuildConfig, mkfs_bin: Path, tests_dir: Path) -> None:
+def qemu_debug(cfg: config.BuildConfig, mkfs_bin: Path, tests_elf_dir: Path) -> None:
     devmode_flag = cfg.out_dir / "devmode.flag"
     devmode_flag.write_text("1\n")
     image_mod.mkfs(mkfs_bin, "put", cfg.disk_img, cfg, devmode_flag, "/system/devmode.flag")
     devmode_flag.unlink()
 
     image_mod.mkfs(mkfs_bin, "mkdir", cfg.disk_img, cfg, "/tests")
-    test_elf_files = sorted(tests_dir.glob("**/*.elf")) if tests_dir.is_dir() else []
+    test_elf_files = sorted(tests_elf_dir.glob("**/*.elf")) if tests_elf_dir and tests_elf_dir.is_dir() else []
+    if not test_elf_files:
+        print("  (no test .elf files found — see --tests-archive)")
     for f in test_elf_files:
         image_mod.mkfs(mkfs_bin, "put", cfg.disk_img, cfg, f, f"/tests/{f.name}")
 

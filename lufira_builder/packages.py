@@ -1,45 +1,32 @@
-"""Упаковка "базовых" user-пакетов (v0.7 план, этап 4) в .lpg через
-lpg_pack (этап 2) — манифест генерируется на лету, потому что путь до
-исходного .elf зависит от --lufira-repo, а lpg_pack принимает только
-готовый текстовый манифест с уже подставленными путями.
+"""Builds the lufira-packages repository (its own build.py, mirroring
+lufira-tests) and reads the resulting index.json to find every default
+package's .lpg — these used to be packed right here from sources living
+inside LufiraOS/userspace/, but that source has moved to its own
+repository so the kernel repo doesn't carry package sources/binaries.
+
+Mirrors the tests.py "sibling repo with its own build + release metadata"
+pattern: index.json's "lpg" field is a local path today (no release
+server yet) and will become a real download URL later with no change to
+how fetch_default_packages() is called.
 """
 
+import json
 import subprocess
-import tempfile
+import sys
 from pathlib import Path
 
-from . import config
+
+def _run(cmd, cwd) -> None:
+    subprocess.run(cmd, cwd=str(cwd), check=True)
 
 
-def _run(cmd) -> None:
-    subprocess.run(cmd, check=True)
+def fetch_default_packages(lufira_packages_repo: Path, lufira_repo: Path) -> list:
+    """Builds every package from source in lufira_packages_repo, returns
+    the list of resulting .lpg paths (resolved from its index.json)."""
+    build_py = lufira_packages_repo / "build.py"
+    # cwd matters: build.py's own --out-dir/index.json paths are relative
+    # to wherever it runs, not to this file.
+    _run([sys.executable, str(build_py), "--lufira-repo", str(lufira_repo)], cwd=lufira_packages_repo)
 
-
-def build_packages(cfg: config.BuildConfig, lpg_pack_bin: Path, package_specs: list) -> list:
-    """Пакует список описаний (см. config.DEFAULT_USER_PACKAGES/
-    DEFAULT_BASE_PACKAGES) в .lpg, возвращает пути к собранным файлам."""
-    pkg_dir = cfg.out_dir / "packages"
-    pkg_dir.mkdir(parents=True, exist_ok=True)
-
-    lpg_paths = []
-    for pkg in package_specs:
-        elf_src = cfg.lufira_repo / pkg["elf"]
-        dest = f"/bin/{Path(pkg['elf']).name}"
-        manifest = (
-            f"name={pkg['name']}\n"
-            f"version={pkg['version']}\n"
-            f"category={pkg['category']}\n"
-            "depends=\n"
-            "[files]\n"
-            f"{elf_src} {dest} 755\n"
-        )
-        with tempfile.NamedTemporaryFile("w", suffix=".manifest", delete=False) as tf:
-            tf.write(manifest)
-            manifest_path = tf.name
-
-        lpg_path = pkg_dir / f"{pkg['name']}.lpg"
-        _run([str(lpg_pack_bin), manifest_path, str(lpg_path)])
-        Path(manifest_path).unlink()
-        lpg_paths.append(lpg_path)
-
-    return lpg_paths
+    index = json.loads((lufira_packages_repo / "index.json").read_text())
+    return [lufira_packages_repo / pkg["lpg"] for pkg in index["packages"]]

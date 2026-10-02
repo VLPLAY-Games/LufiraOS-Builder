@@ -59,6 +59,12 @@ class BuildConfig:
     packages: list = field(default_factory=list)  # list of paths to .lpg files
     build_kernel: bool = True
     install_default_packages: bool = True
+    # None - install every default package (today's behaviour). A set -
+    # install only the named ones (see --only-package in build.py and the
+    # GUI's per-package checkboxes), point 6 of the user's list: picking
+    # individual packages instead of the old all-or-nothing
+    # --no-default-packages.
+    only_packages: set = None
 
     @property
     def region_size(self) -> int:

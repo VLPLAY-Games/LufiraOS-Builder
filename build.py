@@ -10,6 +10,8 @@ on top of the same lufira_builder/ logic as a separate layer.
 """
 
 import argparse
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -31,6 +33,10 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    help="don't run `make kernel bootloader` in LufiraOS, use already-built files")
     p.add_argument("--no-default-packages", action="store_false", dest="install_default_packages",
                    help="don't install du/df/free/cp/mv/ls/.../dlpg (shell.elf is still built/staged — not optional)")
+    p.add_argument("--only-package", action="append", dest="only_packages", default=None,
+                   metavar="NAME",
+                   help="install only this default package (by name, may be repeated) instead of "
+                        "all of them; overrides --no-default-packages")
     p.add_argument("--lufira-packages-repo", type=Path,
                    default=Path(__file__).resolve().parent.parent / config.LUFIRA_PACKAGES_REPO,
                    help="path to the lufira-packages repository (default: sibling of this repository)")
@@ -44,6 +50,7 @@ def make_config(args) -> config.BuildConfig:
         packages=list(args.packages),
         build_kernel=args.build_kernel,
         install_default_packages=args.install_default_packages,
+        only_packages=set(args.only_packages) if args.only_packages else None,
     )
 
 
@@ -69,7 +76,10 @@ def do_build(args) -> config.BuildConfig:
     # resulting du/df/free/cp/mv/... .lpg files get INSTALLED is optional.
     print(f"=== Building lufira-packages ({args.lufira_packages_repo}) ===")
     default_lpgs = packages.fetch_default_packages(args.lufira_packages_repo, cfg.lufira_repo)
-    if cfg.install_default_packages:
+    if cfg.only_packages is not None:
+        default_lpgs = [p for p in default_lpgs if p.stem in cfg.only_packages]
+        cfg.packages = [str(p) for p in default_lpgs] + cfg.packages
+    elif cfg.install_default_packages:
         cfg.packages = [str(p) for p in default_lpgs] + cfg.packages
 
     print("=== Assembling disk image ===")
@@ -106,6 +116,23 @@ def cmd_monitor(args) -> None:
     qemu.qemu_monitor(cfg)
 
 
+def cmd_clear(args) -> None:
+    """Wipes everything a `build` would otherwise reuse incrementally, for
+    a guaranteed-from-scratch rebuild — `make clean` in LufiraOS (removes
+    kernel.bin/BOOTX64.EFI/*.o, see its own Makefile `clean` target) plus
+    this repository's own --out-dir (disk.img/mkfs_lufirafs/usbstick.img).
+    lufira-packages needs no help here: its own build.py already does
+    `shutil.rmtree(out_dir)` unconditionally on every run (see the PACKAGES
+    loop there), so it never goes stale on its own.
+    """
+    print(f"=== make clean ({args.lufira_repo}) ===")
+    subprocess.run(["make", "clean"], cwd=args.lufira_repo, check=True)
+
+    print(f"=== Removing {args.out_dir} ===")
+    shutil.rmtree(args.out_dir, ignore_errors=True)
+    print("clear: done")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -130,6 +157,14 @@ def main() -> None:
     p_monitor = sub.add_parser("monitor", help="assemble and launch QEMU with the HMP monitor (like `make monitor`)")
     add_common_args(p_monitor)
     p_monitor.set_defaults(func=cmd_monitor)
+
+    p_clear = sub.add_parser("clear", help="remove all build output (LufiraOS `make clean` + --out-dir) for a from-scratch rebuild")
+    p_clear.add_argument("--lufira-repo", type=Path,
+                          default=Path(__file__).resolve().parent.parent / "LufiraOS",
+                          help="path to the LufiraOS repository (default: sibling of this repository)")
+    p_clear.add_argument("--out-dir", type=Path, default=Path("build"),
+                          help="directory for disk.img and intermediate files")
+    p_clear.set_defaults(func=cmd_clear)
 
     args = parser.parse_args()
     args.func(args)

@@ -74,6 +74,9 @@ def populate_lufirafs(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
     mkfs(mkfs_bin, "put", image, cfg,
          cfg.lufira_packages_repo / config.SHELL_ELF_PATH, "/bin/shell.elf", "755")
 
+    mkfs(mkfs_bin, "put", image, cfg,
+         cfg.lufira_packages_repo / config.LIBC_SO_PATH, "/lib/libc.so", "644")
+
 
 def install_packages(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
     """Installs cfg.packages into the image being built, using the same

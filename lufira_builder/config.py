@@ -18,7 +18,7 @@ ESP_SIZE = 4 * 1024 * 1024
 REGION_SIZE = DISK_TOTAL_SIZE - ESP_SIZE
 
 # Directories created in the LufiraFS region on every image build.
-DEFAULT_DIRS = ["/system", "/logs", "/etc", "/bin"]
+DEFAULT_DIRS = ["/system", "/logs", "/etc", "/bin", "/lib"]
 
 # Seed files with fixed content/permissions — the same set the Makefile
 # used to lay down directly.
@@ -37,6 +37,14 @@ DEFAULT_SEED_GROUP = "tools/seed/group"
 # compiles it straight to build/shell.elf, with no .lpg wrapper. Path here
 # is relative to LUFIRA_PACKAGES_REPO's own --out-dir (default "build").
 SHELL_ELF_PATH = "build/shell.elf"
+
+# v0.8-мост, пункт 8 (динамическая линковка): та же логика, что у
+# SHELL_ELF_PATH выше — ОДИН общий разделяемый объект, который ядро само
+# грузит и кэширует по фиксированному пути /lib/libc.so (см.
+# dynlink_load_libc_cache(), LufiraOS/kernel/system/elf/dynlink.c), а не
+# .lpg-пакет с собственным манифестом (ни один пакет явно его не
+# "устанавливает" — он нужен им ВСЕМ сразу, как часть самой платформы).
+LIBC_SO_PATH = "build/libc.so"
 
 BIOS_PATH = "/usr/share/ovmf/OVMF.fd"
 

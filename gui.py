@@ -9,12 +9,37 @@ so the GUI can never drift from the CLI's actual behavior.
 """
 
 import queue
+import re
 import subprocess
 import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
+
+# Найденный баг (пользователь: "GUI не показывает цвет", скриншот с сырыми
+# "[2J [01;01H [=3h..."): "Run"/"Debug"/"Monitor" гонят QEMU с -serial
+# stdio, куда гость (LufiraOS) пишет самый настоящий VT100-поток — то же,
+# что видно на физическом serial-порту/реальном терминале. _append_log()
+# раньше просто insert()'ил эти байты в tk.Text как есть — Text не
+# интерпретирует ESC-последовательности вообще, поэтому вместо цвета на
+# экране оказывался буквальный мусор "[2J[01;01H[=3h...".
+#
+# Полноценный VT100-эмулятор (абсолютное позиционирование курсора,
+# scrollback) тут не к месту — self.log это ДОБАВЛЯЮЩИЙСЯ лог, а не сетка
+# ячеек терминала. Прагматичный средний вариант: разбираем SGR
+# (ESC[...m, цвет текста) и применяем как тег tk.Text; все остальные CSI
+# (очистка экрана, позиционирование курсора, DEC private mode set/reset)
+# молча отбрасываем — для лога это чистый шум, который и так не имеет
+# смысла воспроизводить построчно-добавляемым виджетом.
+_ANSI_CSI_RE = re.compile(r'\x1b\[([0-9;=?]*)([A-Za-z])')
+
+_SGR_FG = {
+    30: '#1a1a1a', 31: '#e06c75', 32: '#98c379', 33: '#e5c07b',
+    34: '#61afef', 35: '#c678dd', 36: '#56b6c2', 37: '#d0d0d0',
+    90: '#5c6370', 91: '#ff6b6b', 92: '#b5e890', 93: '#f0d58c',
+    94: '#82b8f0', 95: '#e0a0f0', 96: '#7fd4e0', 97: '#ffffff',
+}
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lufira_builder import config
@@ -118,6 +143,9 @@ class BuilderGUI(tk.Tk):
         self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         yscroll.pack(side=tk.RIGHT, fill=tk.Y)
         paned.add(log_frame, weight=3)
+        for code, color in _SGR_FG.items():
+            self.log.tag_configure(f"fg{code}", foreground=color)
+        self._log_fg_tag = None  # текущий активный SGR-тег (переживает между чанками)
 
         pkg_frame = ttk.Frame(paned)
         ttk.Label(pkg_frame, text="Packages to install").pack(anchor="w")
@@ -176,9 +204,39 @@ class BuilderGUI(tk.Tk):
 
     def _append_log(self, text):
         self.log.configure(state=tk.NORMAL)
-        self.log.insert(tk.END, text)
+
+        # Разбираем ESC[...LETTER по месту их появления в тексте: "m"
+        # (SGR/цвет) меняет self._log_fg_tag на дальнейшие вставки (тег
+        # должен пережить и этот вызов, и границу между чанками из очереди
+        # — цвет часто выставляется в одном chunk'е, а текст приходит в
+        # следующем), любая другая буква (H/J/h/l/K/...) — курсор/очистка/
+        # DEC-режимы — просто вырезается без следа.
+        pos = 0
+        for m in _ANSI_CSI_RE.finditer(text):
+            if m.start() > pos:
+                self._insert_tagged(text[pos:m.start()])
+            params, final = m.group(1), m.group(2)
+            if final == 'm':
+                codes = [int(p) for p in params.split(';') if p.isdigit()] or [0]
+                for code in codes:
+                    if code == 0:
+                        self._log_fg_tag = None
+                    elif code in _SGR_FG:
+                        self._log_fg_tag = f"fg{code}"
+            pos = m.end()
+        if pos < len(text):
+            self._insert_tagged(text[pos:])
+
         self.log.see(tk.END)
         self.log.configure(state=tk.DISABLED)
+
+    def _insert_tagged(self, text):
+        if not text:
+            return
+        if self._log_fg_tag:
+            self.log.insert(tk.END, text, self._log_fg_tag)
+        else:
+            self.log.insert(tk.END, text)
 
     def _drain_output_queue(self):
         try:

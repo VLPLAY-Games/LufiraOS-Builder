@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """LufiraOS-Builder — assembles disk.img from the already-built
-kernel.bin/BOOTX64.EFI (LufiraOS/Makefile now only produces those, v0.7
-plan, stage 3, step 3.0) plus the set of seed files/.lpg packages.
-Takes over the role of the old run/debug/monitor Makefile targets — runs
-QEMU on top of the image it just assembled.
+kernel.bin/BOOTX64.EFI (LufiraOS/Makefile now only produces those) plus
+seed files/.lpg packages, then takes over the old run/debug/monitor
+Makefile targets to run QEMU on the image.
 
-Console CLI for now (see the plan); a GUI, if one is ever needed, would sit
-on top of the same lufira_builder/ logic as a separate layer.
+Console CLI; gui.py is a Tkinter front-end over this same module.
 """
 
 import argparse
@@ -62,9 +60,8 @@ def make_config(args) -> config.BuildConfig:
 def do_build(args) -> config.BuildConfig:
     cfg = make_config(args)
 
-    # Пользователь: "чтобы пользователь мог просто скачать сборщик и
-    # сборщик уже сам всё подтянет" — LufiraOS нужен ВСЕГДА (ядро компилим
-    # только локально, готового бинарного релиза ядра не существует и не
+    # Пользователь: "сборщик сам всё подтянет" — LufiraOS нужен ВСЕГДА
+    # (ядро собирается только локально, готового релиза ядра нет и не
     # планируется), независимо от режима получения пакетов ниже.
     print("=== Checking sibling repositories ===")
     tools.ensure_repo(cfg.lufira_repo, config.LUFIRA_OS_GIT_URL, "LufiraOS")
@@ -82,13 +79,11 @@ def do_build(args) -> config.BuildConfig:
     print("=== Compiling host tools (mkfs_lufirafs) ===")
     host_tools = tools.compile_host_tools(cfg.lufira_repo, cfg.out_dir)
 
-    # lufira-packages also provides shell.elf (see config.SHELL_ELF_PATH) —
-    # NOT optional, populate_lufirafs() needs it regardless of
-    # --no-default-packages. Default: download everything prebuilt from
-    # lufira-packages' own published index.json (no local checkout/
-    # toolchain needed at all — see packages.py). --build-packages-from-
-    # source switches back to building a local checkout, for active package
-    # development.
+    # lufira-packages also provides shell.elf (config.SHELL_ELF_PATH) — not
+    # optional, populate_lufirafs() needs it regardless of
+    # --no-default-packages. Default: download prebuilt packages from
+    # lufira-packages' index.json (see packages.py); --build-packages-from-
+    # source builds a local checkout instead, for package development.
     if args.build_packages_from_source:
         tools.ensure_repo(args.lufira_packages_repo, config.LUFIRA_PACKAGES_GIT_URL, "lufira-packages")
         print(f"=== Building lufira-packages from source ({args.lufira_packages_repo}) ===")
@@ -97,11 +92,9 @@ def do_build(args) -> config.BuildConfig:
         print("=== Fetching lufira-packages release (prebuilt .lpg via index.json) ===")
         cache_dir = cfg.out_dir / "packages_cache"
         default_lpgs, runtime_root = packages.fetch_default_packages_remote(cache_dir)
-        # populate_lufirafs() (image.py) joins cfg.lufira_packages_repo with
-        # config.SHELL_ELF_PATH/LIBC_SO_PATH ("build/shell.elf"/"build/
-        # libc.so") — fetch_default_packages_remote() already laid cache_dir
-        # out in exactly that shape, so pointing cfg there needs no change
-        # to image.py at all.
+        # fetch_default_packages_remote() lays cache_dir out in the same
+        # shape image.py expects (build/shell.elf, build/libc.so), so
+        # pointing cfg.lufira_packages_repo there needs no change to image.py.
         cfg.lufira_packages_repo = runtime_root
 
     if cfg.only_packages is not None:
@@ -145,13 +138,9 @@ def cmd_monitor(args) -> None:
 
 
 def cmd_clear(args) -> None:
-    """Wipes everything a `build` would otherwise reuse incrementally, for
-    a guaranteed-from-scratch rebuild — `make clean` in LufiraOS (removes
-    kernel.bin/BOOTX64.EFI/*.o, see its own Makefile `clean` target) plus
-    this repository's own --out-dir (disk.img/mkfs_lufirafs/usbstick.img).
-    lufira-packages needs no help here: its own build.py already does
-    `shutil.rmtree(out_dir)` unconditionally on every run (see the PACKAGES
-    loop there), so it never goes stale on its own.
+    """Guaranteed from-scratch rebuild: `make clean` in LufiraOS (removes
+    kernel.bin/BOOTX64.EFI/*.o) plus this repo's --out-dir. lufira-packages
+    needs no help — its own build.py already rmtree's its out_dir on every run.
     """
     print(f"=== make clean ({args.lufira_repo}) ===")
     subprocess.run(["make", "clean"], cwd=args.lufira_repo, check=True)

@@ -40,19 +40,13 @@ def build_esp(cfg: config.BuildConfig, bootx64_efi: Path, kernel_bin: Path) -> N
 
 
 def populate_lufirafs(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
-    """Directories + seed files + /bin/shell.elf. All OTHER programs
-    (including dlpg — v0.7 plan, stage 5, sub-stage 5) go through
-    install_packages() below; install_packages() is plain Python in this
-    repository, not something run on the guest, so "can't install itself"
-    was never a real constraint of THIS pipeline.
-    shell.elf is the one deliberate exception: it's not a "package" in the
-    dlpg sense (dlpg will never see it in /etc/packages/installed and can't
-    "remove" it — which would be fatal, since the kernel loads exactly this
-    file directly from a fixed path on every boot/respawn, see
-    spawn_shell_process() in kernel/kernel.c, v0.7 plan, stage 5, sub-stage 6).
-    Its source lives in lufira-packages' shell/ folder now (not base/ or
-    user/ — still not a dlpg package), built by that repo's own build.py
-    alongside the other packages; see config.SHELL_ELF_PATH.
+    """Directories + seed files + /bin/shell.elf. Every other program goes
+    through install_packages() below.
+    shell.elf is the deliberate exception: not a dlpg package (dlpg never
+    sees it in /etc/packages/installed, can't "remove" it — fatal, since
+    the kernel loads it directly on every boot/respawn via
+    spawn_shell_process() in kernel.c). Source: lufira-packages/shell/,
+    built by that repo's build.py — see config.SHELL_ELF_PATH.
     """
     image = cfg.disk_img
     mkfs(mkfs_bin, "format", image, cfg)

@@ -1,22 +1,15 @@
 """Gets every default package's .lpg (plus shell.elf/libc.so) ready for
 image.py to stage — two ways:
 
-- fetch_default_packages_remote() (the DEFAULT — user's request: "the
-  builder shouldn't look for .lpg files locally, it should download them
-  from the link in index.json", so a bare checkout of just THIS repository
-  is enough to build an image, no local lufira-packages checkout or
-  toolchain needed at all): downloads index.json straight from the
-  lufira-packages repository, then every package's .lpg from its own "lpg"
-  URL there, plus shell.elf/libc.so from the "shell_elf"/"libc_so" entries
-  (see lufira-packages/build_index.py — these two aren't .lpg packages,
-  they're direct-staged runtime files the kernel/dynamic linker load from a
-  fixed path, so they get their own top-level index.json entries instead of
-  living in the "packages" array). Caches everything under cache_dir by
-  sha256 — a repeat build only re-downloads what actually changed upstream.
+- fetch_default_packages_remote() (default): downloads index.json from
+  lufira-packages, then each package's .lpg via its "lpg" URL, plus
+  shell.elf/libc.so from the "shell_elf"/"libc_so" entries (not .lpg
+  packages — direct-staged runtime files, see lufira-packages/build_index.py).
+  Caches by sha256 so a repeat build only re-downloads what changed.
+  No local lufira-packages checkout or toolchain needed.
 
-- fetch_default_packages() (opt-in via --build-packages-from-source — for
-  actively developing packages against local source changes): builds
-  lufira-packages from source via its own build.py, exactly as before.
+- fetch_default_packages() (opt-in via --build-packages-from-source):
+  builds lufira-packages from source via its own build.py.
 """
 
 import hashlib
@@ -46,11 +39,9 @@ def _download(url: str, dest: Path) -> None:
 
 
 def _fetch_verified(url: str, dest: Path, expected_sha256: str, label: str) -> None:
-    """Skips the download if dest is already cached with the right hash —
-    the common case on a repeat `build.py run` where upstream hasn't
-    changed. Raises if the downloaded bytes don't match (corrupted
-    transfer, or the file changed mid-flight) rather than silently staging
-    something that doesn't match what index.json claimed."""
+    """Skips the download if dest already matches expected_sha256 (the
+    common repeat-build case). Raises on mismatch instead of silently
+    staging bytes that don't match what index.json claimed."""
     if dest.exists() and _sha256_file(dest) == expected_sha256:
         return
     print(f"  downloading {label} ({url})")
@@ -64,12 +55,9 @@ def _fetch_verified(url: str, dest: Path, expected_sha256: str, label: str) -> N
 
 
 def fetch_default_packages_remote(cache_dir: Path) -> tuple:
-    """Returns (list_of_lpg_paths, runtime_root) — runtime_root is a
-    directory laid out like a lufira-packages checkout's build/ output
-    (runtime_root/build/shell.elf, runtime_root/build/libc.so) so it can be
-    passed as cfg.lufira_packages_repo unchanged — image.py's
-    config.SHELL_ELF_PATH/LIBC_SO_PATH joins already expect exactly that
-    shape, so nothing there needs to know or care which path got it."""
+    """Returns (list_of_lpg_paths, runtime_root). runtime_root mirrors a
+    lufira-packages checkout's build/ layout (build/shell.elf, build/libc.so)
+    so it can be passed straight through as cfg.lufira_packages_repo."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     index_path = cache_dir / "index.json"
     print(f"  fetching {config.LUFIRA_PACKAGES_INDEX_URL}")

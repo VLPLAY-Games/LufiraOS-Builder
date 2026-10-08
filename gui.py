@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""LufiraOS-Builder GUI — a thin Tkinter front-end over build.py's own
-subcommands (build/run/debug/monitor). Pt.6 of the user's list: build.py's
-docstring only ever said "a GUI, if one is ever needed, would sit on top
-of the same lufira_builder/ logic as a separate layer" — this is that
-layer. No new build logic lives here: every button just runs
-`python3 build.py <subcommand>` as a subprocess and streams its output,
-so the GUI can never drift from the CLI's actual behavior.
+"""LufiraOS-Builder GUI — thin Tkinter front-end over build.py's
+build/run/debug/monitor subcommands. No build logic lives here: every
+button runs `python3 build.py <subcommand>` as a subprocess and streams
+its output, so the GUI can't drift from the CLI's behavior.
 """
 
 import queue
@@ -17,21 +14,14 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-# Найденный баг (пользователь: "GUI не показывает цвет", скриншот с сырыми
-# "[2J [01;01H [=3h..."): "Run"/"Debug"/"Monitor" гонят QEMU с -serial
-# stdio, куда гость (LufiraOS) пишет самый настоящий VT100-поток — то же,
-# что видно на физическом serial-порту/реальном терминале. _append_log()
-# раньше просто insert()'ил эти байты в tk.Text как есть — Text не
-# интерпретирует ESC-последовательности вообще, поэтому вместо цвета на
-# экране оказывался буквальный мусор "[2J[01;01H[=3h...".
+# QEMU -serial stdio feeds the guest's raw VT100 stream straight into the
+# log; tk.Text doesn't interpret ESC sequences, so without parsing they'd
+# show up as literal garbage ("[2J[01;01H...").
 #
-# Полноценный VT100-эмулятор (абсолютное позиционирование курсора,
-# scrollback) тут не к месту — self.log это ДОБАВЛЯЮЩИЙСЯ лог, а не сетка
-# ячеек терминала. Прагматичный средний вариант: разбираем SGR
-# (ESC[...m, цвет текста) и применяем как тег tk.Text; все остальные CSI
-# (очистка экрана, позиционирование курсора, DEC private mode set/reset)
-# молча отбрасываем — для лога это чистый шум, который и так не имеет
-# смысла воспроизводить построчно-добавляемым виджетом.
+# A full VT100 emulator is overkill — self.log is an append-only log, not
+# a terminal grid. Pragmatic middle ground: parse SGR (ESC[...m, color)
+# into tk.Text tags; silently drop every other CSI (cursor moves, screen
+# clear, DEC modes) since they're meaningless for an append-only view.
 _ANSI_CSI_RE = re.compile(r'\x1b\[([0-9;=?]*)([A-Za-z])')
 
 _SGR_FG = {
@@ -48,14 +38,12 @@ REPO_ROOT = Path(__file__).resolve().parent
 BUILD_PY = REPO_ROOT / "build.py"
 LUFIRA_PACKAGES_REPO = REPO_ROOT.parent / config.LUFIRA_PACKAGES_REPO
 
-# The package CATALOG (names/versions/categories) comes straight from
-# lufira-packages' own build.py PACKAGES dict, imported directly — unlike
-# index.json (packages.py), this doesn't need a build to have run first,
-# which is what lets the checkboxes below exist before the very first
-# Build click. Safe to import: everything in that file sits behind
-# `if __name__ == "__main__":`. Loaded by explicit file path (not a bare
-# `import build`) since this repository has its own top-level build.py —
-# a name clash sys.path order alone would be too easy to get wrong.
+# Package CATALOG (names/versions/categories) comes straight from
+# lufira-packages' build.py PACKAGES dict — unlike index.json (packages.py)
+# this needs no prior build, so checkboxes exist before the first Build
+# click. Safe to import (everything there sits behind `if __name__`).
+# Loaded by explicit file path, not `import build`, to dodge a name clash
+# with this repo's own top-level build.py.
 import importlib.util
 
 
@@ -63,10 +51,8 @@ def _load_package_catalog():
     build_py = LUFIRA_PACKAGES_REPO / "build.py"
     if not build_py.is_file():
         return {}
-    # build.py does its own `import build_index` (a sibling module) — needs
-    # its directory on sys.path for that lookup to resolve, on top of the
-    # explicit-file-path load used here to dodge the name clash with this
-    # repository's own build.py.
+    # build.py does its own `import build_index` (sibling module) — needs
+    # its directory on sys.path for that lookup to resolve.
     repo_str = str(LUFIRA_PACKAGES_REPO)
     added = repo_str not in sys.path
     if added:
@@ -115,11 +101,9 @@ class BuilderGUI(tk.Tk):
             b.pack(side=tk.LEFT, padx=4)
             self._buttons.append(b)
 
-        # Separate from the others: wipes LufiraOS's `make clean` output
-        # and this repository's own --out-dir for a guaranteed
-        # from-scratch rebuild (build.py's `clear` subcommand) — confirmed
-        # first since it deletes build output, even though it's all
-        # regenerable.
+        # Separate from the others: runs build.py's `clear` subcommand
+        # (wipes LufiraOS's make-clean output + --out-dir) — confirmed
+        # first since it deletes build output, even if regenerable.
         clear_btn = ttk.Button(bar, text="Clear", command=self._run_clear)
         clear_btn.pack(side=tk.LEFT, padx=(12, 4))
         self._buttons.append(clear_btn)
@@ -156,10 +140,9 @@ class BuilderGUI(tk.Tk):
         ttk.Button(btn_row, text="None", command=lambda: self._set_all_packages(False)).pack(
             side=tk.LEFT, padx=(4, 0))
 
-        # ttk.Treeview has no native checkbox column — "sel" just shows a
-        # checkbox GLYPH that _on_package_click() toggles by hand (bound
-        # below). self._pkg_selected maps package name -> bool, seeded all
-        # True (today's "install every default package" default).
+        # ttk.Treeview has no native checkbox column — "sel" shows a glyph
+        # that _on_package_click() toggles by hand. self._pkg_selected maps
+        # name -> bool, seeded all True (install-everything default).
         cols = ("sel", "name", "version", "category")
         self.pkg_tree = ttk.Treeview(pkg_frame, columns=cols, show="headings", height=20)
         self.pkg_tree.heading("sel", text="")
@@ -180,7 +163,7 @@ class BuilderGUI(tk.Tk):
             self.pkg_tree.insert("", tk.END, values=("", "(lufira-packages not found)", "", ""))
             return
         for name, (version, category, _extra_includes) in sorted(PACKAGE_CATALOG.items()):
-            mark = "☑" if self._pkg_selected.get(name, True) else "☐"  # ☑ / ☐
+            mark = "☑" if self._pkg_selected.get(name, True) else "☐"
             self.pkg_tree.insert("", tk.END, iid=name, values=(mark, name, version, category))
 
     def _on_package_click(self, event):
@@ -205,12 +188,10 @@ class BuilderGUI(tk.Tk):
     def _append_log(self, text):
         self.log.configure(state=tk.NORMAL)
 
-        # Разбираем ESC[...LETTER по месту их появления в тексте: "m"
-        # (SGR/цвет) меняет self._log_fg_tag на дальнейшие вставки (тег
-        # должен пережить и этот вызов, и границу между чанками из очереди
-        # — цвет часто выставляется в одном chunk'е, а текст приходит в
-        # следующем), любая другая буква (H/J/h/l/K/...) — курсор/очистка/
-        # DEC-режимы — просто вырезается без следа.
+        # Parse ESC[...LETTER in place: "m" (SGR/color) updates
+        # self._log_fg_tag for later inserts (must survive across chunk
+        # boundaries — color and text often arrive in separate queue
+        # items); any other letter (cursor/clear/DEC mode) is dropped.
         pos = 0
         for m in _ANSI_CSI_RE.finditer(text):
             if m.start() > pos:
@@ -263,10 +244,8 @@ class BuilderGUI(tk.Tk):
         if self.no_build_kernel.get():
             cmd.append("--no-build-kernel")
 
-        # --only-package (build.py) replaces the old all-or-nothing
-        # --no-default-packages: selecting none of the checkboxes installs
-        # none, selecting all of them is the same as today's default (so
-        # the flag is only passed when the selection is an actual subset).
+        # --only-package replaces the old all-or-nothing
+        # --no-default-packages; only passed when selection is an actual subset.
         if PACKAGE_CATALOG:
             selected = self._selected_package_names()
             if len(selected) < len(PACKAGE_CATALOG):

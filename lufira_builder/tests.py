@@ -1,15 +1,10 @@
 """Fetches the lufira-tests release archive and unpacks its .elf test
-binaries — v0.7 plan, stage 7. The tests used to live inside LufiraOS/test
-and get glob'd directly by qemu_debug(); now they're built and released by
-a separate lufira-tests repository with its own build (see build.py
-there), and this module is the only place that knows how to go get the
-result.
+binaries. Tests used to live in LufiraOS/test and get glob'd directly by
+qemu_debug(); now they're built/released by the separate lufira-tests repo.
 
-`source` is a local path OR an http(s) URL to a .tar.gz of .elf files.
-There's no release server yet, so the default in build.py just points at
-lufira-tests' own dist/ output (a sibling checkout) — same stub-today,
-real-URL-later pattern as the "lpg" field in lufira-packages/index.json:
-swapping a real GitHub Releases URL in later needs no change here.
+`source` is a local path or http(s) URL to a .tar.gz of .elf files. No
+release server yet, so build.py's default points at a sibling checkout's
+dist/ output — swapping in a real URL later needs no change here.
 """
 
 import tarfile

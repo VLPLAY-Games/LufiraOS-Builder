@@ -27,45 +27,33 @@ DEFAULT_README_DEST = "/readme.txt"
 DEFAULT_SEED_PASSWD = "tools/seed/passwd"  # relative to the LufiraOS root
 DEFAULT_SEED_GROUP = "tools/seed/group"
 
-# v0.7 plan, stage 5, sub-stage 6: the kernel loads exactly this file
-# directly on every boot/shell respawn (spawn_shell_process(), kernel.c) —
-# NOT a package, direct-stage forever (see the comment on
-# populate_lufirafs() in image.py). shell.c itself has moved out of
-# LufiraOS into lufira-packages (its shell/ folder, not base/ or user/ —
-# still not a dlpg package, just source that lives there too so the
-# kernel repo carries no userspace program source at all); its build.py
-# compiles it straight to build/shell.elf, with no .lpg wrapper. Path here
-# is relative to LUFIRA_PACKAGES_REPO's own --out-dir (default "build").
+# Kernel loads this file directly on every boot/shell respawn
+# (spawn_shell_process(), kernel.c) — not a dlpg package (see
+# populate_lufirafs() in image.py for why). Source lives in
+# lufira-packages/shell/, built straight to build/shell.elf (no .lpg
+# wrapper). Path is relative to LUFIRA_PACKAGES_REPO's own --out-dir.
 SHELL_ELF_PATH = "build/shell.elf"
 
-# v0.8-мост, пункт 8 (динамическая линковка): та же логика, что у
-# SHELL_ELF_PATH выше — ОДИН общий разделяемый объект, который ядро само
-# грузит и кэширует по фиксированному пути /lib/libc.so (см.
-# dynlink_load_libc_cache(), LufiraOS/kernel/system/elf/dynlink.c), а не
-# .lpg-пакет с собственным манифестом (ни один пакет явно его не
-# "устанавливает" — он нужен им ВСЕМ сразу, как часть самой платформы).
+# Та же логика, что у SHELL_ELF_PATH: единый .so, который ядро сам грузит
+# и кэширует по фиксированному пути /lib/libc.so (dynlink_load_libc_cache(),
+# dynlink.c) — не .lpg-пакет, он нужен всем пакетам сразу как часть платформы.
 LIBC_SO_PATH = "build/libc.so"
 
 BIOS_PATH = "/usr/share/ovmf/OVMF.fd"
 
-# Package sources (cp/mv/ls/mkdir/rm/kill/ps/dlpg/du/df/free/cpuload) used
-# to live inside LufiraOS/userspace/ and get packed into .lpg right here.
-# They've moved out to their own lufira-packages repository (with its own
-# build.py, mirroring lufira-tests) so the kernel repo doesn't carry
-# package sources/binaries at all — see packages.py's
-# fetch_default_packages(), which runs that build and reads its index.json.
+# Package sources (cp/mv/ls/.../dlpg) moved out of LufiraOS/userspace/ into
+# their own lufira-packages repo (own build.py, mirrors lufira-tests) so
+# the kernel repo carries no package source/binaries — see packages.py.
 LUFIRA_PACKAGES_REPO = "lufira-packages"  # sibling of this repository, like lufira_repo
 
-# Автоклонирование недостающих sibling-репозиториев (пользователь: "чтобы
-# пользователь мог просто скачать сборщик и сборщик уже сам всё
+# Автоклонирование недостающих sibling-репозиториев ("сборщик сам всё
 # подтянет") — tools.ensure_repo() клонирует сюда, если каталога ещё нет.
 LUFIRA_OS_GIT_URL = "https://github.com/VLPLAY-Games/LufiraOS"
 LUFIRA_PACKAGES_GIT_URL = "https://github.com/VLPLAY-Games/lufira-packages"
 
-# Тот же URL, что REMOTE_INDEX_URL в lufira-packages/base/dlpg.c — ДЕФОЛТНЫЙ
-# путь получения пакетов теперь скачивание готовых .lpg (см. packages.py,
-# fetch_default_packages_remote()), а не локальная сборка из исходников
-# (та доступна через --build-packages-from-source, build.py).
+# Тот же URL, что REMOTE_INDEX_URL в lufira-packages/base/dlpg.c — дефолтный
+# путь получения пакетов (см. fetch_default_packages_remote() в packages.py);
+# локальная сборка из исходников доступна через --build-packages-from-source.
 LUFIRA_PACKAGES_INDEX_URL = (
     "https://raw.githubusercontent.com/VLPLAY-Games/lufira-packages/refs/heads/main/index.json"
 )
@@ -81,11 +69,8 @@ class BuildConfig:
     packages: list = field(default_factory=list)  # list of paths to .lpg files
     build_kernel: bool = True
     install_default_packages: bool = True
-    # None - install every default package (today's behaviour). A set -
-    # install only the named ones (see --only-package in build.py and the
-    # GUI's per-package checkboxes), point 6 of the user's list: picking
-    # individual packages instead of the old all-or-nothing
-    # --no-default-packages.
+    # None = install every default package. A set = install only the
+    # named ones (--only-package in build.py / GUI checkboxes).
     only_packages: set = None
 
     @property

@@ -17,6 +17,21 @@ import subprocess
 from pathlib import Path
 
 
+def ensure_repo(path: Path, git_url: str, label: str) -> None:
+    """Clones git_url into path if it doesn't exist yet — the point (user's
+    request: "a user should be able to just download the builder and the
+    builder pulls everything itself") is that a bare checkout of THIS
+    repository alone is enough to run `python3 build.py run`: no sibling
+    LufiraOS checkout has to be prepared by hand first. Does nothing if
+    path already exists (whatever's there — a real checkout, a symlink, a
+    deliberately different version — is left alone; this only fills in a
+    MISSING directory, never touches or updates an existing one)."""
+    if path.exists():
+        return
+    print(f"  {label} not found at {path} — cloning {git_url}")
+    subprocess.run(["git", "clone", git_url, str(path)], check=True)
+
+
 def build_kernel_and_bootloader(lufira_repo: Path) -> None:
     """Runs `make kernel bootloader` in LufiraOS's trimmed-down Makefile."""
     subprocess.run(

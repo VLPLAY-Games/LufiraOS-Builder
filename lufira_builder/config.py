@@ -56,6 +56,20 @@ BIOS_PATH = "/usr/share/ovmf/OVMF.fd"
 # fetch_default_packages(), which runs that build and reads its index.json.
 LUFIRA_PACKAGES_REPO = "lufira-packages"  # sibling of this repository, like lufira_repo
 
+# Автоклонирование недостающих sibling-репозиториев (пользователь: "чтобы
+# пользователь мог просто скачать сборщик и сборщик уже сам всё
+# подтянет") — tools.ensure_repo() клонирует сюда, если каталога ещё нет.
+LUFIRA_OS_GIT_URL = "https://github.com/VLPLAY-Games/LufiraOS"
+LUFIRA_PACKAGES_GIT_URL = "https://github.com/VLPLAY-Games/lufira-packages"
+
+# Тот же URL, что REMOTE_INDEX_URL в lufira-packages/base/dlpg.c — ДЕФОЛТНЫЙ
+# путь получения пакетов теперь скачивание готовых .lpg (см. packages.py,
+# fetch_default_packages_remote()), а не локальная сборка из исходников
+# (та доступна через --build-packages-from-source, build.py).
+LUFIRA_PACKAGES_INDEX_URL = (
+    "https://raw.githubusercontent.com/VLPLAY-Games/lufira-packages/refs/heads/main/index.json"
+)
+
 
 @dataclass
 class BuildConfig:

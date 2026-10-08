@@ -16,6 +16,20 @@ def _run(cmd) -> None:
 def _common_prefix(cfg: config.BuildConfig) -> list:
     return [
         "qemu-system-x86_64",
+        # accel=kvm:tcg — пробует аппаратное ускорение (/dev/kvm) и сама
+        # падает назад на программную эмуляцию, если его нет (другой хост/
+        # контейнер без /dev/kvm/virtualization) — никогда не ошибка
+        # запуска, то же самое поведение, что было раньше (TCG), просто
+        # БЫСТРЕЕ, когда ускорение доступно. Важно для TLS/крипто
+        # (SYS_NET_FETCH, dlpg sync/upgrade) — RSA-модэкспонента на чистом
+        # TCG заметно медленнее, чем на реальном железе, и выглядит как
+        # зависание без неё. НАЙДЕННЫЙ БАГ: сам по себе "-accel kvm:tcg"
+        # (без -machine) не парсится этой версией QEMU ("invalid
+        # accelerator kvm:tcg") — список через ':' поддерживает только
+        # свойство accel= у -machine, не отдельный флаг -accel. "pc" — тот
+        # же машинный тип, что QEMU выбрал бы по умолчанию без -machine
+        # вовсе, так что это не меняет эмулируемый чипсет, только ускоритель.
+        "-machine", "pc,accel=kvm:tcg",
         "-bios", config.BIOS_PATH,
         "-drive", f"file={cfg.disk_img},format=raw,if=ide,index=0",
     ]

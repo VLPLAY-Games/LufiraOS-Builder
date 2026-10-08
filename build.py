@@ -39,7 +39,12 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                         "all of them; overrides --no-default-packages")
     p.add_argument("--lufira-packages-repo", type=Path,
                    default=Path(__file__).resolve().parent.parent / config.LUFIRA_PACKAGES_REPO,
-                   help="path to the lufira-packages repository (default: sibling of this repository)")
+                   help="path to the lufira-packages repository (only used with "
+                        "--build-packages-from-source; default: sibling of this repository)")
+    p.add_argument("--build-packages-from-source", action="store_true",
+                   help="build lufira-packages from a local source checkout (--lufira-packages-repo) "
+                        "instead of the default of downloading prebuilt .lpg files straight from its "
+                        "published index.json — use this when actively developing packages")
 
 
 def make_config(args) -> config.BuildConfig:
@@ -57,6 +62,13 @@ def make_config(args) -> config.BuildConfig:
 def do_build(args) -> config.BuildConfig:
     cfg = make_config(args)
 
+    # Пользователь: "чтобы пользователь мог просто скачать сборщик и
+    # сборщик уже сам всё подтянет" — LufiraOS нужен ВСЕГДА (ядро компилим
+    # только локально, готового бинарного релиза ядра не существует и не
+    # планируется), независимо от режима получения пакетов ниже.
+    print("=== Checking sibling repositories ===")
+    tools.ensure_repo(cfg.lufira_repo, config.LUFIRA_OS_GIT_URL, "LufiraOS")
+
     if cfg.build_kernel:
         print("=== Building kernel + bootloader (LufiraOS Makefile) ===")
         tools.build_kernel_and_bootloader(cfg.lufira_repo)
@@ -70,12 +82,28 @@ def do_build(args) -> config.BuildConfig:
     print("=== Compiling host tools (mkfs_lufirafs) ===")
     host_tools = tools.compile_host_tools(cfg.lufira_repo, cfg.out_dir)
 
-    # lufira-packages also builds shell.elf (see config.SHELL_ELF_PATH) —
+    # lufira-packages also provides shell.elf (see config.SHELL_ELF_PATH) —
     # NOT optional, populate_lufirafs() needs it regardless of
-    # --no-default-packages, so this build always runs. Only whether the
-    # resulting du/df/free/cp/mv/... .lpg files get INSTALLED is optional.
-    print(f"=== Building lufira-packages ({args.lufira_packages_repo}) ===")
-    default_lpgs = packages.fetch_default_packages(args.lufira_packages_repo, cfg.lufira_repo)
+    # --no-default-packages. Default: download everything prebuilt from
+    # lufira-packages' own published index.json (no local checkout/
+    # toolchain needed at all — see packages.py). --build-packages-from-
+    # source switches back to building a local checkout, for active package
+    # development.
+    if args.build_packages_from_source:
+        tools.ensure_repo(args.lufira_packages_repo, config.LUFIRA_PACKAGES_GIT_URL, "lufira-packages")
+        print(f"=== Building lufira-packages from source ({args.lufira_packages_repo}) ===")
+        default_lpgs = packages.fetch_default_packages(args.lufira_packages_repo, cfg.lufira_repo)
+    else:
+        print("=== Fetching lufira-packages release (prebuilt .lpg via index.json) ===")
+        cache_dir = cfg.out_dir / "packages_cache"
+        default_lpgs, runtime_root = packages.fetch_default_packages_remote(cache_dir)
+        # populate_lufirafs() (image.py) joins cfg.lufira_packages_repo with
+        # config.SHELL_ELF_PATH/LIBC_SO_PATH ("build/shell.elf"/"build/
+        # libc.so") — fetch_default_packages_remote() already laid cache_dir
+        # out in exactly that shape, so pointing cfg there needs no change
+        # to image.py at all.
+        cfg.lufira_packages_repo = runtime_root
+
     if cfg.only_packages is not None:
         default_lpgs = [p for p in default_lpgs if p.stem in cfg.only_packages]
         cfg.packages = [str(p) for p in default_lpgs] + cfg.packages

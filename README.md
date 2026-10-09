@@ -5,12 +5,12 @@
 
 **LufiraOS-Builder** assembles the bootable `disk.img` for [LufiraOS](https://github.com/VLPLAY-Games/LufiraOS) and runs it in QEMU. It replaces the old `make run`/`make debug`/`make monitor` Makefile targets with a standalone Python CLI (plus an optional Tkinter GUI) that drives the build independently of the kernel's own Makefile.
 
-It does not contain any OS code itself — it is pure tooling: it builds the kernel/bootloader from a sibling [LufiraOS](https://github.com/VLPLAY-Games/LufiraOS) checkout, stages seed files and `.lpg` packages from a sibling [lufira-packages](https://github.com/VLPLAY-Games/lufira-packages) checkout onto the LufiraFS region of the disk image, and launches QEMU on top of the result.
+It does not contain any OS code itself — it is pure tooling. A bare checkout of just this repository is enough to go straight to `python3 build.py run`: a missing [LufiraOS](https://github.com/VLPLAY-Games/LufiraOS) checkout is cloned automatically, and by default every package is downloaded prebuilt (sha256-verified) straight from [lufira-packages](https://github.com/VLPLAY-Games/lufira-packages)' published `index.json` — no local package-repo checkout or extra toolchain needed for that part. `--build-packages-from-source` switches to building `lufira-packages` from a local checkout instead (also auto-cloned if missing), for actively developing packages.
 
 ## What it does
 
 - **`build`** — assembles `disk.img` (FAT12 ESP + LufiraFS region) from the kernel/bootloader binaries and the default (or a custom `--package`/`--only-package` selection of) `.lpg` packages, without launching anything.
-- **`run`** — `build`, then launches QEMU (serial on stdio).
+- **`run`** — `build`, then launches QEMU (serial on stdio, KVM-accelerated when available).
 - **`debug`** — `build` plus the `/tests` payload and an attached USB stick image, then launches QEMU.
 - **`monitor`** — `build`, then launches QEMU with the HMP monitor exposed on `telnet:127.0.0.1:4444` (scripted input/screendumps for live testing).
 - **`clear`** — removes all build output (`LufiraOS`'s own `make clean` plus this repository's `--out-dir`) for a clean rebuild.
@@ -20,14 +20,15 @@ A thin Tkinter GUI (`gui.py`) sits on top of the same CLI: every button just run
 ## Usage
 
 ```bash
-# Expects sibling checkouts: ../LufiraOS and ../lufira-packages (overridable
-# with --lufira-repo / --lufira-packages-repo).
+# A bare checkout of this repository alone is enough — LufiraOS is cloned
+# automatically if missing, and packages are fetched prebuilt by default.
 python3 build.py run
 ```
 
 ```bash
 python3 build.py --help
-python3 build.py run --help      # per-subcommand options (--package, --only-package, --no-build-kernel, ...)
+python3 build.py run --help      # per-subcommand options (--package, --only-package,
+                                   # --no-build-kernel, --build-packages-from-source, ...)
 ```
 
 ```bash

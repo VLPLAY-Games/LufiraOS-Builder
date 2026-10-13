@@ -14,7 +14,7 @@ def _run(cmd) -> None:
 
 
 def _common_prefix(cfg: config.BuildConfig) -> list:
-    return [
+    cmd = [
         "qemu-system-x86_64",
         # accel=kvm:tcg: tries HW accel (/dev/kvm), falls back to TCG if
         # unavailable — never a launch error, just faster when accel exists.
@@ -24,9 +24,15 @@ def _common_prefix(cfg: config.BuildConfig) -> list:
         # flag ("invalid accelerator kvm:tcg" on this QEMU version). "pc" is
         # QEMU's own default machine type — this doesn't change the chipset.
         "-machine", "pc,accel=kvm:tcg",
-        "-bios", config.BIOS_PATH,
-        "-drive", f"file={cfg.disk_img},format=raw,if=ide,index=0",
     ]
+    # boot_mode="bios" omits -bios entirely so QEMU falls back to its
+    # built-in SeaBIOS (legacy/CSM boot) instead of OVMF (UEFI) — the same
+    # disk.img boots through either path when built with --legacy-bios,
+    # see boot_legacy/ in LufiraOS.
+    if cfg.boot_mode != "bios":
+        cmd += ["-bios", config.BIOS_PATH]
+    cmd += ["-drive", f"file={cfg.disk_img},format=raw,if=ide,index=0"]
+    return cmd
 
 
 def qemu_run(cfg: config.BuildConfig) -> None:

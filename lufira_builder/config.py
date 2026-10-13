@@ -68,6 +68,8 @@ class BuildConfig:
     esp_size: int = ESP_SIZE
     packages: list = field(default_factory=list)  # list of paths to .lpg files
     build_kernel: bool = True
+    legacy_bios: bool = False  # embed the legacy BIOS stage1/2 + legacy_main chain too
+    boot_mode: str = "uefi"    # "uefi" or "bios" — which firmware qemu.py boots with
     install_default_packages: bool = True
     # None = install every default package. A set = install only the
     # named ones (--only-package in build.py / GUI checkboxes).

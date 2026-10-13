@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import config, lpg
+from . import config, legacy_boot, lpg
 
 
 def _run(cmd) -> None:
@@ -21,7 +21,12 @@ def mkfs(mkfs_bin: Path, cmd: str, image: Path, cfg: config.BuildConfig, *args) 
     _run([str(mkfs_bin), cmd, str(image), str(cfg.esp_size), str(cfg.region_size), *[str(a) for a in args]])
 
 
-def build_esp(cfg: config.BuildConfig, bootx64_efi: Path, kernel_bin: Path) -> None:
+def build_esp(cfg: config.BuildConfig, bootx64_efi: Path, kernel_bin: Path,
+              legacy_boot_bins: dict | None = None) -> None:
+    """legacy_boot_bins, when given (cfg.legacy_bios build), is
+    {"stage1": Path, "stage2": Path, "legacy_main": Path} — see
+    legacy_boot.py for how they get patched into the same ESP image UEFI
+    already boots directly (one disk.img, bootable both ways)."""
     image = cfg.disk_img
     esp_img = cfg.out_dir / "esp.img"
 
@@ -30,11 +35,23 @@ def build_esp(cfg: config.BuildConfig, bootx64_efi: Path, kernel_bin: Path) -> N
 
     _run(["dd", "if=/dev/zero", f"of={esp_img}", "bs=1024",
           f"count={cfg.esp_size // 1024}", "status=none"])
-    _run(["mkfs.fat", "-F", "12", "-S", "512", str(esp_img)])
+    mkfs_fat_cmd = ["mkfs.fat", "-F", "12", "-S", "512"]
+    if legacy_boot_bins is not None:
+        # Carve out extra reserved sectors (never touched by the FAT12
+        # filesystem itself) for stage2/legacy_main/kernel.bin — see
+        # legacy_boot.py's module docstring for why this is safe.
+        mkfs_fat_cmd += ["-R", str(legacy_boot.RESERVED_SECTORS)]
+    mkfs_fat_cmd.append(str(esp_img))
+    _run(mkfs_fat_cmd)
     _run(["mmd", "-i", str(esp_img), "::/EFI"])
     _run(["mmd", "-i", str(esp_img), "::/EFI/BOOT"])
     _run(["mcopy", "-i", str(esp_img), str(bootx64_efi), "::/EFI/BOOT/BOOTX64.EFI"])
     _run(["mcopy", "-i", str(esp_img), str(kernel_bin), "::/kernel.bin"])
+
+    if legacy_boot_bins is not None:
+        legacy_boot.patch_esp(esp_img, legacy_boot_bins["stage1"], legacy_boot_bins["stage2"],
+                               legacy_boot_bins["legacy_main"], kernel_bin)
+
     _run(["dd", f"if={esp_img}", f"of={image}", "conv=notrunc", "status=none"])
     esp_img.unlink()
 
@@ -112,9 +129,10 @@ def install_packages(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
     Path(db_tmp).unlink()
 
 
-def assemble(cfg: config.BuildConfig, mkfs_bin: Path, bootx64_efi: Path, kernel_bin: Path) -> Path:
+def assemble(cfg: config.BuildConfig, mkfs_bin: Path, bootx64_efi: Path, kernel_bin: Path,
+             legacy_boot_bins: dict | None = None) -> Path:
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
-    build_esp(cfg, bootx64_efi, kernel_bin)
+    build_esp(cfg, bootx64_efi, kernel_bin, legacy_boot_bins)
     populate_lufirafs(cfg, mkfs_bin)
     install_packages(cfg, mkfs_bin)
     _run(["sync"])

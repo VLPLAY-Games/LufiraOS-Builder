@@ -26,13 +26,22 @@ def ensure_repo(path: Path, git_url: str, label: str) -> None:
     subprocess.run(["git", "clone", git_url, str(path)], check=True)
 
 
-def build_kernel_and_bootloader(lufira_repo: Path) -> None:
-    """Runs `make kernel bootloader` in LufiraOS's trimmed-down Makefile."""
+def build_kernel_and_bootloader(lufira_repo: Path, legacy_bios: bool = False) -> None:
+    """Runs `make kernel bootloader` in LufiraOS's trimmed-down Makefile,
+    plus `make bootloader-bios` (stage1/stage2/legacy_main — see
+    boot_legacy/) when legacy_bios is requested. That target needs nasm;
+    left out of the default build so it stays an opt-in dependency."""
     subprocess.run(
         ["make", "kernel", "bootloader"],
         cwd=lufira_repo,
         check=True,
     )
+    if legacy_bios:
+        subprocess.run(
+            ["make", "bootloader-bios"],
+            cwd=lufira_repo,
+            check=True,
+        )
 
 
 def compile_host_tools(lufira_repo: Path, out_dir: Path) -> dict:

@@ -29,6 +29,12 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    help="install an extra .lpg package during image build (may be repeated)")
     p.add_argument("--no-build-kernel", action="store_false", dest="build_kernel",
                    help="don't run `make kernel bootloader` in LufiraOS, use already-built files")
+    p.add_argument("--legacy-bios", action="store_true",
+                   help="also embed the legacy BIOS boot chain (boot_legacy/ in LufiraOS) into "
+                        "disk.img, alongside the UEFI path — one image, bootable both ways")
+    p.add_argument("--boot-mode", choices=("uefi", "bios"), default="uefi",
+                   help="which firmware `run`/`debug`/`monitor` launch QEMU with (default: uefi). "
+                        "\"bios\" only works on an image built with --legacy-bios")
     p.add_argument("--no-default-packages", action="store_false", dest="install_default_packages",
                    help="don't install du/df/free/cp/mv/ls/.../dlpg (shell.elf is still built/staged — not optional)")
     p.add_argument("--only-package", action="append", dest="only_packages", default=None,
@@ -52,6 +58,8 @@ def make_config(args) -> config.BuildConfig:
         out_dir=args.out_dir,
         packages=list(args.packages),
         build_kernel=args.build_kernel,
+        legacy_bios=args.legacy_bios,
+        boot_mode=args.boot_mode,
         install_default_packages=args.install_default_packages,
         only_packages=set(args.only_packages) if args.only_packages else None,
     )
@@ -68,13 +76,26 @@ def do_build(args) -> config.BuildConfig:
 
     if cfg.build_kernel:
         print("=== Building kernel + bootloader (LufiraOS Makefile) ===")
-        tools.build_kernel_and_bootloader(cfg.lufira_repo)
+        tools.build_kernel_and_bootloader(cfg.lufira_repo, legacy_bios=cfg.legacy_bios)
 
     bootx64_efi = cfg.lufira_repo / "build" / "BOOTX64.EFI"
     kernel_bin = cfg.lufira_repo / "build" / "kernel.bin"
     if not bootx64_efi.exists() or not kernel_bin.exists():
         sys.exit(f"error: {bootx64_efi} / {kernel_bin} not found — run `make kernel bootloader` in "
                   f"{cfg.lufira_repo} first, or drop --no-build-kernel")
+
+    legacy_boot_bins = None
+    if cfg.legacy_bios:
+        legacy_dir = cfg.lufira_repo / "build" / "legacy_boot"
+        legacy_boot_bins = {
+            "stage1": legacy_dir / "stage1.bin",
+            "stage2": legacy_dir / "stage2.bin",
+            "legacy_main": legacy_dir / "legacy_main.bin",
+        }
+        missing = [str(p) for p in legacy_boot_bins.values() if not p.exists()]
+        if missing:
+            sys.exit(f"error: --legacy-bios given but missing {missing} — run `make bootloader-bios` "
+                      f"in {cfg.lufira_repo} first, or drop --no-build-kernel")
 
     print("=== Compiling host tools (mkfs_lufirafs) ===")
     host_tools = tools.compile_host_tools(cfg.lufira_repo, cfg.out_dir)
@@ -104,7 +125,7 @@ def do_build(args) -> config.BuildConfig:
         cfg.packages = [str(p) for p in default_lpgs] + cfg.packages
 
     print("=== Assembling disk image ===")
-    disk_img = image.assemble(cfg, host_tools["mkfs_lufirafs"], bootx64_efi, kernel_bin)
+    disk_img = image.assemble(cfg, host_tools["mkfs_lufirafs"], bootx64_efi, kernel_bin, legacy_boot_bins)
     print(f"disk image created: {disk_img}")
     return cfg
 

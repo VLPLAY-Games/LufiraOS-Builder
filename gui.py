@@ -77,13 +77,14 @@ class BuilderGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("LufiraOS-Builder")
-        self.geometry("820x560")
+        self.geometry("880x620")
 
         self._proc = None
         self._out_queue = queue.Queue()
         self._buttons = []
 
         self._build_toolbar()
+        self._build_boot_section()
         self._build_body()
         self.after(80, self._drain_output_queue)
 
@@ -112,8 +113,58 @@ class BuilderGUI(tk.Tk):
         ttk.Checkbutton(bar, text="--no-build-kernel", variable=self.no_build_kernel).pack(
             side=tk.LEFT, padx=(16, 4))
 
+        # Default is "download prebuilt .lpg from lufira-packages' published
+        # index.json" (do_build() in build.py) — this flips to building a
+        # local lufira-packages checkout instead, for package development.
+        self.build_from_source = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bar, text="--build-packages-from-source", variable=self.build_from_source).pack(
+            side=tk.LEFT, padx=(4, 4))
+
         self.status_var = tk.StringVar(value="Idle")
         ttk.Label(bar, textvariable=self.status_var).pack(side=tk.RIGHT, padx=4)
+
+    def _build_boot_section(self):
+        # Separate, clearly-labeled area for boot-firmware choices — kept
+        # apart from the toolbar's build-mechanics toggles and from the
+        # package list, same "separate concerns" split the user asked for.
+        frame = ttk.LabelFrame(self, text="Boot firmware", padding=8)
+        frame.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 8))
+
+        # --legacy-bios: embeds the legacy BIOS stage1/stage2/legacy_main
+        # chain into disk.img ALONGSIDE the UEFI path (one image, bootable
+        # both ways) — see boot_legacy/ in LufiraOS. Still experimental
+        # (v0.9, not fully finished) — flagged here so the GUI doesn't
+        # quietly imply it's as battle-tested as the UEFI path.
+        self.legacy_bios = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame, text="Embed Legacy BIOS boot chain (alongside UEFI)",
+            variable=self.legacy_bios, command=self._on_legacy_bios_toggle,
+        ).pack(side=tk.LEFT)
+
+        ttk.Label(frame, text="experimental, not fully finished yet",
+                  foreground="#a06000").pack(side=tk.LEFT, padx=(8, 20))
+
+        # --boot-mode: which firmware run/debug/monitor actually launch
+        # QEMU with. "bios" only works on an image built with
+        # --legacy-bios, so the radio button stays disabled (and the
+        # selection snaps back to "uefi") until that checkbox is on —
+        # the invalid combination simply isn't reachable through the GUI.
+        ttk.Label(frame, text="Launch with:").pack(side=tk.LEFT, padx=(0, 4))
+        self.boot_mode = tk.StringVar(value="uefi")
+        self.boot_mode_uefi_rb = ttk.Radiobutton(
+            frame, text="UEFI", value="uefi", variable=self.boot_mode)
+        self.boot_mode_bios_rb = ttk.Radiobutton(
+            frame, text="Legacy BIOS", value="bios", variable=self.boot_mode,
+            state=tk.DISABLED)
+        self.boot_mode_uefi_rb.pack(side=tk.LEFT)
+        self.boot_mode_bios_rb.pack(side=tk.LEFT, padx=(4, 0))
+
+    def _on_legacy_bios_toggle(self):
+        if self.legacy_bios.get():
+            self.boot_mode_bios_rb.configure(state=tk.NORMAL)
+        else:
+            self.boot_mode.set("uefi")
+            self.boot_mode_bios_rb.configure(state=tk.DISABLED)
 
     def _build_body(self):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -132,7 +183,8 @@ class BuilderGUI(tk.Tk):
         self._log_fg_tag = None  # текущий активный SGR-тег (переживает между чанками)
 
         pkg_frame = ttk.Frame(paned)
-        ttk.Label(pkg_frame, text="Packages to install").pack(anchor="w")
+        ttk.Label(pkg_frame, text="Packages to install (grouped by category — click a "
+                                   "category row to toggle all its packages)").pack(anchor="w")
 
         btn_row = ttk.Frame(pkg_frame)
         btn_row.pack(anchor="w", pady=(2, 4))
@@ -143,13 +195,17 @@ class BuilderGUI(tk.Tk):
         # ttk.Treeview has no native checkbox column — "sel" shows a glyph
         # that _on_package_click() toggles by hand. self._pkg_selected maps
         # name -> bool, seeded all True (install-everything default).
-        cols = ("sel", "name", "version", "category")
-        self.pkg_tree = ttk.Treeview(pkg_frame, columns=cols, show="headings", height=20)
+        # show="tree headings" turns on the #0 tree column (expand arrows +
+        # label) so packages can nest under a category row — the package
+        # name lives in #0 instead of its own data column.
+        self.pkg_tree = ttk.Treeview(pkg_frame, columns=("sel", "version"),
+                                      show="tree headings", height=22)
+        self.pkg_tree.heading("#0", text="package / category")
+        self.pkg_tree.column("#0", width=190, anchor="w")
         self.pkg_tree.heading("sel", text="")
         self.pkg_tree.column("sel", width=28, anchor="center", stretch=False)
-        for c, w in zip(("name", "version", "category"), (90, 60, 60)):
-            self.pkg_tree.heading(c, text=c)
-            self.pkg_tree.column(c, width=w, anchor="w")
+        self.pkg_tree.heading("version", text="version")
+        self.pkg_tree.column("version", width=60, anchor="w")
         self.pkg_tree.pack(fill=tk.BOTH, expand=True)
         self.pkg_tree.bind("<Button-1>", self._on_package_click)
         paned.add(pkg_frame, weight=1)
@@ -157,24 +213,58 @@ class BuilderGUI(tk.Tk):
         self._pkg_selected = {name: True for name in PACKAGE_CATALOG}
         self._populate_packages()
 
+    def _category_mark(self, names):
+        """☑ all selected, ☐ none selected, ◐ a mix — same glyph set as
+        individual packages, just summarizing the whole category at a glance."""
+        selected = [self._pkg_selected.get(n, True) for n in names]
+        if all(selected):
+            return "☑"
+        if not any(selected):
+            return "☐"
+        return "◐"
+
     def _populate_packages(self):
         self.pkg_tree.delete(*self.pkg_tree.get_children())
         if not PACKAGE_CATALOG:
-            self.pkg_tree.insert("", tk.END, values=("", "(lufira-packages not found)", "", ""))
+            self.pkg_tree.insert("", tk.END, text="(lufira-packages not found)")
             return
-        for name, (version, category, _extra_includes) in sorted(PACKAGE_CATALOG.items()):
-            mark = "☑" if self._pkg_selected.get(name, True) else "☐"
-            self.pkg_tree.insert("", tk.END, iid=name, values=(mark, name, version, category))
+
+        by_category = {}
+        for name, (version, category, _extra_includes) in PACKAGE_CATALOG.items():
+            by_category.setdefault(category, []).append((name, version))
+
+        for category in sorted(by_category):
+            items = sorted(by_category[category])
+            names = [name for name, _version in items]
+            cat_iid = f"cat:{category}"
+            self.pkg_tree.insert(
+                "", tk.END, iid=cat_iid, open=True,
+                text=f"{category} ({len(items)})",
+                values=(self._category_mark(names), ""))
+            for name, version in items:
+                mark = "☑" if self._pkg_selected.get(name, True) else "☐"
+                self.pkg_tree.insert(cat_iid, tk.END, iid=name, text=name, values=(mark, version))
 
     def _on_package_click(self, event):
         if self.pkg_tree.identify_region(event.x, event.y) != "cell":
             return
         if self.pkg_tree.identify_column(event.x) != "#1":  # "sel" column
             return
-        name = self.pkg_tree.identify_row(event.y)
-        if not name or name not in self._pkg_selected:
+        iid = self.pkg_tree.identify_row(event.y)
+        if not iid:
             return
-        self._pkg_selected[name] = not self._pkg_selected[name]
+
+        if iid.startswith("cat:"):
+            category = iid[len("cat:"):]
+            names = [name for name, (_v, c, _e) in PACKAGE_CATALOG.items() if c == category]
+            turn_on = not all(self._pkg_selected.get(n, True) for n in names)
+            for n in names:
+                self._pkg_selected[n] = turn_on
+        elif iid in self._pkg_selected:
+            self._pkg_selected[iid] = not self._pkg_selected[iid]
+        else:
+            return
+
         self._populate_packages()
 
     def _set_all_packages(self, selected):
@@ -243,12 +333,27 @@ class BuilderGUI(tk.Tk):
         cmd = [sys.executable, str(BUILD_PY), subcommand]
         if self.no_build_kernel.get():
             cmd.append("--no-build-kernel")
+        if self.build_from_source.get():
+            cmd.append("--build-packages-from-source")
+
+        if self.legacy_bios.get():
+            cmd.append("--legacy-bios")
+        if self.boot_mode.get() != "uefi":
+            cmd += ["--boot-mode", self.boot_mode.get()]
 
         # --only-package replaces the old all-or-nothing
-        # --no-default-packages; only passed when selection is an actual subset.
+        # --no-default-packages; only passed when selection is an actual
+        # subset. NAJDENNYJ BUG: selecting zero packages used to fall
+        # through this branch with an empty --only-package loop, i.e. NO
+        # flag at all reached build.py — which then defaulted to "install
+        # every package" (cfg.only_packages stays None), the exact opposite
+        # of what "None" in the GUI is supposed to mean. --no-default-
+        # packages is the real "install none of the optional ones" flag.
         if PACKAGE_CATALOG:
             selected = self._selected_package_names()
-            if len(selected) < len(PACKAGE_CATALOG):
+            if not selected:
+                cmd.append("--no-default-packages")
+            elif len(selected) < len(PACKAGE_CATALOG):
                 for name in selected:
                     cmd += ["--only-package", name]
 

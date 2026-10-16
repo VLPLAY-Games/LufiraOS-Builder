@@ -21,6 +21,7 @@ _FILE_SIZE = struct.calcsize(_FILE_FMT)  # 76
 
 CATEGORY_BASE = 0
 CATEGORY_USER = 1
+CATEGORY_GAMES = 2
 
 
 class LpgError(Exception):
@@ -98,7 +99,7 @@ def parse_installed_db(text: str) -> list:
             continue
         name, ver_str, cat_str = line.split(":", 2)
         parts = tuple(int(x) for x in ver_str.split("."))
-        cat = CATEGORY_BASE if cat_str == "base" else CATEGORY_USER
+        cat = CATEGORY_BASE if cat_str == "base" else CATEGORY_GAMES if cat_str == "games" else CATEGORY_USER
         entries.append(InstalledEntry(name, parts, cat))
     return entries
 
@@ -106,7 +107,7 @@ def parse_installed_db(text: str) -> list:
 def render_installed_db(entries: list) -> str:
     lines = []
     for e in entries:
-        cat_str = "base" if e.category == CATEGORY_BASE else "user"
+        cat_str = "base" if e.category == CATEGORY_BASE else "games" if e.category == CATEGORY_GAMES else "user"
         lines.append(f"{e.name}:{version_str(e.version)}:{cat_str}")
     return "".join(line + "\n" for line in lines)
 

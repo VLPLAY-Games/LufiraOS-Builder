@@ -68,7 +68,12 @@ def _load_package_catalog_local():
         spec = importlib.util.spec_from_file_location("lufira_packages_build", build_py)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return dict(module.PACKAGES)
+        catalog = dict(module.PACKAGES)
+        # doom.lpg isn't in PACKAGES (it has its own build_doom_package(),
+        # not the generic per-package loop) — add it here so it still shows
+        # up as a checkbox, under its own "games" category.
+        catalog["doom"] = (module.DOOM_PACKAGE_VERSION, module.DOOM_PACKAGE_CATEGORY, [])
+        return catalog
     finally:
         if added:
             sys.path.remove(repo_str)

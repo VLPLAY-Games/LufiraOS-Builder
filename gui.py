@@ -5,12 +5,14 @@ button runs `python3 build.py <subcommand>` as a subprocess and streams
 its output, so the GUI can't drift from the CLI's behavior.
 """
 
+import json
 import queue
 import re
 import subprocess
 import sys
 import threading
 import tkinter as tk
+import urllib.request
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -39,18 +41,23 @@ BUILD_PY = REPO_ROOT / "build.py"
 LUFIRA_PACKAGES_REPO = REPO_ROOT.parent / config.LUFIRA_PACKAGES_REPO
 
 # Package CATALOG (names/versions/categories) comes straight from
-# lufira-packages' build.py PACKAGES dict — unlike index.json (packages.py)
-# this needs no prior build, so checkboxes exist before the first Build
-# click. Safe to import (everything there sits behind `if __name__`).
-# Loaded by explicit file path, not `import build`, to dodge a name clash
-# with this repo's own top-level build.py.
+# lufira-packages' build.py PACKAGES dict when a sibling checkout exists —
+# unlike index.json (packages.py) this needs no prior build, so checkboxes
+# exist before the first Build click. Safe to import (everything there sits
+# behind `if __name__`). Loaded by explicit file path, not `import build`,
+# to dodge a name clash with this repo's own top-level build.py.
+#
+# A fresh clone of just LufiraOS-Builder has no sibling lufira-packages
+# checkout, so that path finds nothing — fall back to the same published
+# index.json fetch_default_packages_remote() uses (packages.py), read here
+# only for name/version/category, not the .lpg bytes themselves.
 import importlib.util
 
 
-def _load_package_catalog():
+def _load_package_catalog_local():
     build_py = LUFIRA_PACKAGES_REPO / "build.py"
     if not build_py.is_file():
-        return {}
+        return None
     # build.py does its own `import build_index` (sibling module) — needs
     # its directory on sys.path for that lookup to resolve.
     repo_str = str(LUFIRA_PACKAGES_REPO)
@@ -67,10 +74,29 @@ def _load_package_catalog():
             sys.path.remove(repo_str)
 
 
-try:
-    PACKAGE_CATALOG = _load_package_catalog()
-except Exception:
-    PACKAGE_CATALOG = {}
+def _load_package_catalog_remote():
+    with urllib.request.urlopen(config.LUFIRA_PACKAGES_INDEX_URL, timeout=10) as resp:
+        index = json.loads(resp.read())
+    return {
+        pkg["name"]: (pkg["version"], pkg["category"], [])
+        for pkg in index["packages"]
+    }
+
+
+def _load_package_catalog():
+    try:
+        local = _load_package_catalog_local()
+        if local:
+            return local
+    except Exception:
+        pass
+    try:
+        return _load_package_catalog_remote()
+    except Exception:
+        return {}
+
+
+PACKAGE_CATALOG = _load_package_catalog()
 
 
 class BuilderGUI(tk.Tk):
@@ -250,7 +276,8 @@ class BuilderGUI(tk.Tk):
     def _populate_packages(self):
         self.pkg_tree.delete(*self.pkg_tree.get_children())
         if not PACKAGE_CATALOG:
-            self.pkg_tree.insert("", tk.END, text="(lufira-packages not found)")
+            self.pkg_tree.insert("", tk.END, text="(no package catalog — no local lufira-packages "
+                                                    "checkout and index.json fetch failed, check network)")
             return
 
         by_category = {}

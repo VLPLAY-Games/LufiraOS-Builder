@@ -14,16 +14,39 @@ import subprocess
 from pathlib import Path
 
 
+def _checkout_latest_release_tag(path: Path, label: str) -> None:
+    """Pins a fresh clone to its latest SemVer release tag (vX.Y.Z,
+    highest first) instead of leaving it on the default branch's HEAD — a
+    from-scratch `python3 build.py run` (no prior sibling checkout) should
+    build the latest RELEASED version, not whatever happens to be
+    mid-development on main. No-op if the repo has no tags at all — e.g.
+    lufira-packages, which ships releases as prebuilt .lpg via its own
+    index.json instead (see packages.py), not as git tags."""
+    result = subprocess.run(
+        ["git", "-C", str(path), "tag", "--list", "v*", "--sort=-v:refname"],
+        check=True, capture_output=True, text=True,
+    )
+    tags = [t for t in result.stdout.splitlines() if t.strip()]
+    if not tags:
+        return
+    latest = tags[0]
+    print(f"  {label}: pinning fresh clone to latest release {latest}")
+    subprocess.run(["git", "-C", str(path), "checkout", latest], check=True)
+
+
 def ensure_repo(path: Path, git_url: str, label: str) -> None:
     """Clones git_url into path if it doesn't exist yet, so a bare
     checkout of just this repository is enough to run `python3 build.py
     run` — no sibling LufiraOS checkout needed ahead of time. Leaves an
     existing path alone (checkout, symlink, whatever) — only fills in a
-    missing directory, never updates one."""
+    missing directory, never updates one. A fresh clone is then pinned to
+    the latest release tag, if the repo has any (see
+    _checkout_latest_release_tag())."""
     if path.exists():
         return
     print(f"  {label} not found at {path} — cloning {git_url}")
     subprocess.run(["git", "clone", git_url, str(path)], check=True)
+    _checkout_latest_release_tag(path, label)
 
 
 def build_kernel_and_bootloader(lufira_repo: Path, legacy_bios: bool = False) -> None:

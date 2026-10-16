@@ -5,6 +5,7 @@ Makefile down to "just kernel.bin + the bootloader" (v0.7 plan, stage 3,
 step 3.0), the whole disk.img build moved here.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +40,31 @@ SHELL_ELF_PATH = "build/shell.elf"
 # dynlink.c) — не .lpg-пакет, он нужен всем пакетам сразу как часть платформы.
 LIBC_SO_PATH = "build/libc.so"
 
-BIOS_PATH = "/usr/share/ovmf/OVMF.fd"
+# OVMF (UEFI firmware for QEMU) lives at a different path on every distro —
+# no two package managers agree. Pick the first one that actually exists on
+# this machine; fall back to the Debian/Ubuntu path (the historical
+# default here) so a missing-firmware error still points at a familiar,
+# googleable path instead of an empty string.
+_OVMF_CANDIDATES = [
+    "/usr/share/ovmf/OVMF.fd",                   # Debian/Ubuntu (ovmf package)
+    "/usr/share/edk2/x64/OVMF.4m.fd",             # Arch (edk2-ovmf package)
+    "/usr/share/edk2-ovmf/x64/OVMF.fd",           # some Arch-derivatives
+    "/usr/share/OVMF/OVMF_CODE.fd",               # Fedora/RHEL/CentOS (edk2-ovmf)
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd",          # older Fedora layout
+    "/usr/share/qemu/ovmf-x86_64-code.bin",       # openSUSE
+]
+BIOS_PATH = next((p for p in _OVMF_CANDIDATES if os.path.exists(p)), _OVMF_CANDIDATES[0])
+
+# Emulated-device choices for run/debug/monitor — which QEMU device backs
+# each LufiraOS driver subsystem (drivers/sound, drivers/net, drivers/disk
+# all probe for more than one controller and fall back gracefully, so any
+# of these combinations boots; this just controls which real driver code
+# path actually gets exercised). Single source of truth for both build.py's
+# argparse choices and gui.py's dropdowns — see qemu.py for the actual
+# -device/-netdev/-drive strings each choice expands to.
+AUDIO_CHOICES = ("ac97", "hda", "none")
+NET_CHOICES = ("rtl8139", "e1000", "e1000e", "none")
+DISK_CHOICES = ("ide", "ahci", "nvme")
 
 # Package sources (cp/mv/ls/.../dlpg) moved out of LufiraOS/userspace/ into
 # their own lufira-packages repo (own build.py, mirrors lufira-tests) so
@@ -74,10 +99,20 @@ class BuildConfig:
     # None = install every default package. A set = install only the
     # named ones (--only-package in build.py / GUI checkboxes).
     only_packages: set = None
+    bios_path: str = None  # override for BIOS_PATH; None = use the auto-detected default
+    # Which QEMU device backs each driver subsystem for run/debug/monitor —
+    # see AUDIO_CHOICES/NET_CHOICES/DISK_CHOICES above and qemu.py.
+    audio: str = "ac97"
+    net_device: str = "rtl8139"
+    disk_mode: str = "ide"
 
     @property
     def region_size(self) -> int:
         return self.disk_total_size - self.esp_size
+
+    @property
+    def effective_bios_path(self) -> str:
+        return self.bios_path or BIOS_PATH
 
     @property
     def disk_img(self) -> Path:

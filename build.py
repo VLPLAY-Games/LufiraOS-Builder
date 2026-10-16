@@ -49,6 +49,21 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    help="build lufira-packages from a local source checkout (--lufira-packages-repo) "
                         "instead of the default of downloading prebuilt .lpg files straight from its "
                         "published index.json — use this when actively developing packages")
+    p.add_argument("--bios-path", default=None,
+                   help="override the auto-detected OVMF firmware path used for UEFI boot "
+                        f"(auto-detected default on this machine: {config.BIOS_PATH})")
+    p.add_argument("--audio", choices=config.AUDIO_CHOICES, default="ac97",
+                   help="which audio controller run/debug/monitor attach (default: ac97) — "
+                        "exercises drivers/sound/ac97.c or hda.c in the guest; \"none\" omits "
+                        "an audio device entirely")
+    p.add_argument("--net-device", choices=config.NET_CHOICES, default="rtl8139",
+                   help="which NIC run/debug/monitor attach (default: rtl8139) — exercises "
+                        "drivers/net/rtl8139.c, e1000.c or e1000e.c in the guest; \"none\" omits "
+                        "a NIC entirely")
+    p.add_argument("--disk-mode", choices=config.DISK_CHOICES, default="ide",
+                   help="which controller run/debug/monitor attach disk.img through (default: "
+                        "ide, legacy ATA) — \"ahci\"/\"nvme\" exercise drivers/disk/ahci.c or "
+                        "nvme.c in the guest instead")
 
 
 def make_config(args) -> config.BuildConfig:
@@ -62,6 +77,10 @@ def make_config(args) -> config.BuildConfig:
         boot_mode=args.boot_mode,
         install_default_packages=args.install_default_packages,
         only_packages=set(args.only_packages) if args.only_packages else None,
+        bios_path=args.bios_path,
+        audio=args.audio,
+        net_device=args.net_device,
+        disk_mode=args.disk_mode,
     )
 
 

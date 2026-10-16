@@ -13,6 +13,56 @@ def _run(cmd) -> None:
     subprocess.run(cmd, check=True)
 
 
+def _disk_args(cfg: config.BuildConfig) -> list:
+    """Main disk.img, attached through whichever controller cfg.disk_mode
+    picks — drivers/disk in LufiraOS probes AHCI, then NVMe, then falls
+    back to legacy ATA PIO, so any of these boots; this just decides which
+    of those driver paths actually gets exercised in QEMU. id="maindisk"
+    stays clear of the usbstick drive (qemu_debug/qemu_monitor use their
+    own "usbstick" id) and of the AHCI controller's own "ahci0" id."""
+    img = f"file={cfg.disk_img},format=raw"
+    if cfg.disk_mode == "ahci":
+        return [
+            "-device", "ahci,id=ahci0",
+            "-drive", f"if=none,id=maindisk,{img}",
+            "-device", "ide-hd,bus=ahci0.0,drive=maindisk",
+        ]
+    if cfg.disk_mode == "nvme":
+        return [
+            "-drive", f"if=none,id=maindisk,{img}",
+            "-device", "nvme,drive=maindisk,serial=lufiraos0",
+        ]
+    # "ide" (default) — legacy ATA, matches this tool's historical behavior.
+    return ["-drive", f"{img},if=ide,index=0"]
+
+
+def _net_args(cfg: config.BuildConfig) -> list:
+    if cfg.net_device == "none":
+        return []
+    return ["-netdev", "user,id=net0", "-device", f"{cfg.net_device},netdev=net0"]
+
+
+def _audio_args(cfg: config.BuildConfig) -> list:
+    """AC97 and Intel HDA both go through one shared ALSA sink
+    (id="audio0") — "alsa" is the one backend that works headless without
+    a running PulseAudio/PipeWire session, matching how this tool already
+    ran AC97 before --audio existed."""
+    if cfg.audio == "none":
+        return []
+    if cfg.audio == "hda":
+        return [
+            "-device", "intel-hda",
+            "-device", "hda-duplex,audiodev=audio0",
+            "-audiodev", "driver=alsa,id=audio0",
+        ]
+    # "ac97" (default)
+    return [
+        "-machine", "pcspk-audiodev=audio0",
+        "-audiodev", "driver=alsa,id=audio0",
+        "-device", "AC97,audiodev=audio0",
+    ]
+
+
 def _common_prefix(cfg: config.BuildConfig) -> list:
     cmd = [
         "qemu-system-x86_64",
@@ -30,18 +80,16 @@ def _common_prefix(cfg: config.BuildConfig) -> list:
     # disk.img boots through either path when built with --legacy-bios,
     # see boot_legacy/ in LufiraOS.
     if cfg.boot_mode != "bios":
-        cmd += ["-bios", config.BIOS_PATH]
-    cmd += ["-drive", f"file={cfg.disk_img},format=raw,if=ide,index=0"]
+        cmd += ["-bios", cfg.effective_bios_path]
+    cmd += _disk_args(cfg)
     return cmd
 
 
 def qemu_run(cfg: config.BuildConfig) -> None:
     cmd = _common_prefix(cfg) + [
         "-m", "128M",
-        "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0",
-        "-machine", "pcspk-audiodev=audio",
-        "-audiodev", "driver=alsa,id=audio",
-        "-device", "AC97,audiodev=audio",
+        *_net_args(cfg),
+        *_audio_args(cfg),
         "-device", "qemu-xhci",
         "-device", "usb-kbd",
         "-device", "usb-mouse",
@@ -87,7 +135,8 @@ def qemu_debug(cfg: config.BuildConfig, mkfs_bin: Path, tests_elf_dir: Path) -> 
     debug_log = cfg.out_dir / "qemu_debug.log"
     cmd = _common_prefix(cfg) + [
         "-m", "256M",
-        "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0",
+        *_net_args(cfg),
+        *_audio_args(cfg),
         "-serial", "stdio", "-no-reboot", "-no-shutdown",
         "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd", "-device", "usb-mouse",
         "-drive", f"if=none,id=usbstick,file={cfg.usbstick_img},format=raw",
@@ -101,7 +150,9 @@ def qemu_monitor(cfg: config.BuildConfig) -> None:
     _build_usbstick_plain(cfg)
     cmd = _common_prefix(cfg) + [
         "-m", "256M",
-        "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0", "-serial", "stdio",
+        *_net_args(cfg),
+        *_audio_args(cfg),
+        "-serial", "stdio",
         "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd", "-device", "usb-mouse",
         "-drive", f"if=none,id=usbstick,file={cfg.usbstick_img},format=raw",
         "-device", "usb-storage,bus=xhci.0,drive=usbstick",

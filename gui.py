@@ -85,6 +85,7 @@ class BuilderGUI(tk.Tk):
 
         self._build_toolbar()
         self._build_boot_section()
+        self._build_devices_section()
         self._build_body()
         self.after(80, self._drain_output_queue)
 
@@ -165,6 +166,29 @@ class BuilderGUI(tk.Tk):
         else:
             self.boot_mode.set("uefi")
             self.boot_mode_bios_rb.configure(state=tk.DISABLED)
+
+    def _build_devices_section(self):
+        # Which QEMU device backs each driver subsystem for run/debug/
+        # monitor (--audio/--net-device/--disk-mode in build.py) — every
+        # option here is a real, independently-probed driver in LufiraOS
+        # (see drivers/sound, drivers/net, drivers/disk), so this picks
+        # which code path actually gets exercised rather than just cosmetics.
+        frame = ttk.LabelFrame(self, text="Emulated devices (run / debug / monitor)", padding=8)
+        frame.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 8))
+
+        self.audio_device = tk.StringVar(value="ac97")
+        self.net_device = tk.StringVar(value="rtl8139")
+        self.disk_mode = tk.StringVar(value="ide")
+
+        for label, var, choices in (
+            ("Audio:", self.audio_device, config.AUDIO_CHOICES),
+            ("Network:", self.net_device, config.NET_CHOICES),
+            ("Disk:", self.disk_mode, config.DISK_CHOICES),
+        ):
+            ttk.Label(frame, text=label).pack(side=tk.LEFT, padx=(0, 4))
+            combo = ttk.Combobox(frame, textvariable=var, values=list(choices),
+                                  state="readonly", width=9)
+            combo.pack(side=tk.LEFT, padx=(0, 16))
 
     def _build_body(self):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -340,6 +364,13 @@ class BuilderGUI(tk.Tk):
             cmd.append("--legacy-bios")
         if self.boot_mode.get() != "uefi":
             cmd += ["--boot-mode", self.boot_mode.get()]
+
+        if self.audio_device.get() != "ac97":
+            cmd += ["--audio", self.audio_device.get()]
+        if self.net_device.get() != "rtl8139":
+            cmd += ["--net-device", self.net_device.get()]
+        if self.disk_mode.get() != "ide":
+            cmd += ["--disk-mode", self.disk_mode.get()]
 
         # --only-package replaces the old all-or-nothing
         # --no-default-packages; only passed when selection is an actual

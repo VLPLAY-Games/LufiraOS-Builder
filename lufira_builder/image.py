@@ -6,11 +6,24 @@ step 3.0 moves it here entirely, cutting the original Makefile down to
 "just kernel.bin + the bootloader".
 """
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 from . import config, legacy_boot, lpg
+
+_VERSION_H_RE = re.compile(r"#define\s+LUFIRA_VERSION_(MAJOR|MINOR|PATCH)\s+(\d+)")
+
+
+def _read_kernel_version(lufira_repo: Path) -> tuple:
+    """kernel/version.h, same plain-regex read as lufira-packages'
+    build.py — the one place a package's min_kernel_version (lpg.py) gets
+    compared against the kernel this IMAGE is actually being built with,
+    catching a mismatch at assembly time instead of at first boot."""
+    text = (lufira_repo / "kernel" / "version.h").read_text()
+    parts = dict(_VERSION_H_RE.findall(text))
+    return (int(parts["MAJOR"]), int(parts["MINOR"]), int(parts["PATCH"]))
 
 
 def _run(cmd) -> None:
@@ -100,10 +113,12 @@ def install_packages(cfg: config.BuildConfig, mkfs_bin: Path) -> None:
     image = cfg.disk_img
     mkfs(mkfs_bin, "mkdir", image, cfg, "/etc/packages")
 
+    kernel_version = _read_kernel_version(cfg.lufira_repo)
+
     installed: list = []
     for pkg_path in cfg.packages:
         pkg = lpg.parse_lpg(pkg_path)
-        plan = lpg.plan_install(pkg, installed, allow_existing=True)
+        plan = lpg.plan_install(pkg, installed, allow_existing=True, kernel_version=kernel_version)
 
         for dest_path, data, mode in plan.files:
             with tempfile.NamedTemporaryFile("wb", delete=False) as tf:

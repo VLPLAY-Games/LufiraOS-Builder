@@ -11,9 +11,11 @@ from dataclasses import dataclass, field
 MAGIC = b"LPG1"
 
 # '<' — no alignment, mirrors the __attribute__((packed)) structs in
-# tools/lpg_format.h byte-for-byte.
-_HEADER_FMT = "<4s32sHHHBBII"
-_HEADER_SIZE = struct.calcsize(_HEADER_FMT)  # 52
+# tools/lpg_format.h byte-for-byte. Trailing HHH is min_kernel_version,
+# appended to the end of lpg_header_t — see that field's own comment in
+# lpg_format.h for why it's a build-time fact, not a per-package choice.
+_HEADER_FMT = "<4s32sHHHBBIIHHH"
+_HEADER_SIZE = struct.calcsize(_HEADER_FMT)  # 58
 _DEP_FMT = "<32sHHH"
 _DEP_SIZE = struct.calcsize(_DEP_FMT)  # 38
 _FILE_FMT = "<64sIII"
@@ -47,6 +49,7 @@ class LpgPackage:
     category: int
     deps: list  # [(name, min_version)]
     files: list  # [LpgFile]
+    min_kernel_version: tuple = (0, 0, 0)  # (major, minor, patch)
 
 
 def version_str(v: tuple) -> str:
@@ -62,8 +65,8 @@ def parse_lpg(path) -> LpgPackage:
     if len(data) < _HEADER_SIZE:
         raise LpgError(f"{path}: too small to be a .lpg")
 
-    magic, name_raw, maj, minr, pat, category, _reserved, dep_count, file_count = \
-        struct.unpack_from(_HEADER_FMT, data, 0)
+    (magic, name_raw, maj, minr, pat, category, _reserved, dep_count, file_count,
+     kmaj, kminr, kpat) = struct.unpack_from(_HEADER_FMT, data, 0)
     if magic != MAGIC:
         raise LpgError(f"{path}: bad magic")
     if dep_count > 16 or file_count > 64 or file_count == 0:
@@ -82,7 +85,8 @@ def parse_lpg(path) -> LpgPackage:
         files.append(LpgFile(_cstr(fpath), fsize, fmode, data[foffset:foffset + fsize]))
         off += _FILE_SIZE
 
-    return LpgPackage(_cstr(name_raw), (maj, minr, pat), category, deps, files)
+    return LpgPackage(_cstr(name_raw), (maj, minr, pat), category, deps, files,
+                      (kmaj, kminr, kpat))
 
 
 @dataclass
@@ -122,8 +126,19 @@ class InstallPlan:
     installed_after: list  # the updated list of InstalledEntry
 
 
-def plan_install(pkg: LpgPackage, installed: list, allow_existing: bool) -> InstallPlan:
-    """Mirrors do_install() from dlpg.c: dependencies first, then files."""
+def plan_install(pkg: LpgPackage, installed: list, allow_existing: bool,
+                 kernel_version: tuple = None) -> InstallPlan:
+    """Mirrors do_install() from dlpg.c: kernel compatibility, then
+    dependencies, then files. kernel_version is the kernel this IMAGE is
+    being built against (image.py reads it from LufiraOS/kernel/version.h,
+    the same source lufira-packages/build.py stamped the package with) —
+    None skips the check (e.g. a caller that doesn't know it yet)."""
+    if kernel_version is not None and not version_gte(kernel_version, pkg.min_kernel_version):
+        raise LpgError(
+            f"package '{pkg.name}' needs kernel >= {version_str(pkg.min_kernel_version)} "
+            f"(building against {version_str(kernel_version)})"
+        )
+
     by_name = {e.name: e for e in installed}
 
     existing = by_name.get(pkg.name)

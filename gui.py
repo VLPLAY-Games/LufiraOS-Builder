@@ -91,10 +91,12 @@ def _load_package_catalog_local():
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         catalog = dict(module.PACKAGES)
-        # doom.lpg isn't in PACKAGES (it has its own build_doom_package(),
-        # not the generic per-package loop) — add it here so it still shows
-        # up as a checkbox, under its own "games" category.
+        # doom.lpg/netd.lpg aren't in PACKAGES (each has its own
+        # build_doom_package()/build_netd_package(), not the generic
+        # per-package loop) — add them here so they still show up as
+        # checkboxes, under their own categories ("games"/"daemons").
         catalog["doom"] = (module.DOOM_PACKAGE_VERSION, module.DOOM_PACKAGE_CATEGORY, [])
+        catalog["netd"] = (module.NETD_PACKAGE_VERSION, module.NETD_PACKAGE_CATEGORY, [])
         return catalog
     finally:
         if added:

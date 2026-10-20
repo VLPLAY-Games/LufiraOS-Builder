@@ -18,9 +18,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lufira_builder import config, image, packages, qemu, tests, tools
 
 
+def _app_root() -> Path:
+    # __file__ не указывает на реальный каталог на диске при запуске из
+    # однофайловой PyInstaller-сборки — используем каталог самого бинарника.
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
 def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--lufira-repo", type=Path,
-                   default=Path(__file__).resolve().parent.parent / "LufiraOS",
+                   default=_app_root().parent / "LufiraOS",
                    help="path to the LufiraOS repository (default: sibling of this repository)")
     p.add_argument("--out-dir", type=Path, default=Path("build"),
                    help="directory for disk.img and intermediate files")
@@ -42,7 +50,7 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    help="install only this default package (by name, may be repeated) instead of "
                         "all of them; overrides --no-default-packages")
     p.add_argument("--lufira-packages-repo", type=Path,
-                   default=Path(__file__).resolve().parent.parent / config.LUFIRA_PACKAGES_REPO,
+                   default=_app_root().parent / config.LUFIRA_PACKAGES_REPO,
                    help="path to the lufira-packages repository (only used with "
                         "--build-packages-from-source; default: sibling of this repository)")
     p.add_argument("--build-packages-from-source", action="store_true",
@@ -217,7 +225,7 @@ def main() -> None:
 
     p_clear = sub.add_parser("clear", help="remove all build output (LufiraOS `make clean` + --out-dir) for a from-scratch rebuild")
     p_clear.add_argument("--lufira-repo", type=Path,
-                          default=Path(__file__).resolve().parent.parent / "LufiraOS",
+                          default=_app_root().parent / "LufiraOS",
                           help="path to the LufiraOS repository (default: sibling of this repository)")
     p_clear.add_argument("--out-dir", type=Path, default=Path("build"),
                           help="directory for disk.img and intermediate files")

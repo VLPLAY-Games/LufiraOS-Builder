@@ -14,6 +14,17 @@ from pathlib import Path
 # a mismatch means we'd format a different disk region than the one the
 # kernel later reads (the same risk that used to be flagged directly in
 # the Makefile).
+#
+# Back to 16 MiB (12 MiB LufiraFS region) — briefly tried 32/64 MiB while
+# chasing "dlpg install doom" failures, but disk space was never the real
+# issue (confirmed at 64 MiB/60 MiB-free-region, which still failed the
+# same way). The two actual bugs were (1) LUFIRAFS_MAX_FILE_SIZE being
+# smaller than doom.lpg — fixed via LUFIRAFS_BLOCK_SIZE in
+# lufirafs_format.h — and (2) dlpg install never creating a file's parent
+# directory (/usr/share didn't exist on an image that never had doom
+# baked in at build time, where mkfs_lufirafs's ensure_dir_path() would
+# have created it for free) — fixed via ensure_parent_dirs() in
+# lufira-packages/base/dlpg.c.
 DISK_TOTAL_SIZE = 16 * 1024 * 1024
 ESP_SIZE = 4 * 1024 * 1024
 REGION_SIZE = DISK_TOTAL_SIZE - ESP_SIZE

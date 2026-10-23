@@ -141,6 +141,7 @@ class BuilderGUI(tk.Tk):
         self._build_toolbar()
         self._build_boot_section()
         self._build_devices_section()
+        self._build_drivers_section()
         self._build_body()
         self.after(80, self._drain_output_queue)
 
@@ -245,6 +246,29 @@ class BuilderGUI(tk.Tk):
                                   state="readonly", width=9)
             combo.pack(side=tk.LEFT, padx=(0, 16))
 
+    def _build_drivers_section(self):
+        # netd/soundd — не обычные опциональные пакеты (ls/cp/...), а
+        # root-демоны, без которых у образа вообще нет сети/звука (0.9.5:
+        # вынесены из ядра в userspace, см. config.DRIVER_PACKAGES) —
+        # своя labeled-секция, тот же принцип "отдельная зона", что у Boot
+        # firmware/Emulated devices выше, а не затерянная строка в общем
+        # дереве пакетов. Исключены из PACKAGE_CATALOG-дерева в
+        # _populate_packages() — выбираются только здесь.
+        frame = ttk.LabelFrame(self, text="Userspace drivers", padding=8)
+        frame.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 8))
+
+        self.driver_vars = {}
+        names = [n for n in config.DRIVER_PACKAGES if n in PACKAGE_CATALOG]
+        if not names:
+            ttk.Label(frame, text="(no driver packages found in the catalog)").pack(side=tk.LEFT)
+            return
+        for name in names:
+            version, _category, _extra_includes = PACKAGE_CATALOG[name]
+            var = tk.BooleanVar(value=True)
+            self.driver_vars[name] = var
+            ttk.Checkbutton(frame, text=f"{name} ({version})", variable=var).pack(
+                side=tk.LEFT, padx=(0, 16))
+
     def _build_body(self):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -289,7 +313,10 @@ class BuilderGUI(tk.Tk):
         self.pkg_tree.bind("<Button-1>", self._on_package_click)
         paned.add(pkg_frame, weight=1)
 
-        self._pkg_selected = {name: True for name in PACKAGE_CATALOG}
+        # Драйверы (netd/soundd) выбираются в своей секции
+        # (_build_drivers_section()), не здесь — см. комментарий там.
+        self._pkg_selected = {name: True for name in PACKAGE_CATALOG
+                               if name not in config.DRIVER_PACKAGES}
         self._populate_packages()
 
     def _category_mark(self, names):
@@ -311,6 +338,8 @@ class BuilderGUI(tk.Tk):
 
         by_category = {}
         for name, (version, category, _extra_includes) in PACKAGE_CATALOG.items():
+            if name in config.DRIVER_PACKAGES:
+                continue  # своя секция, см. _build_drivers_section()
             by_category.setdefault(category, []).append((name, version))
 
         for category in sorted(by_category):
@@ -436,13 +465,25 @@ class BuilderGUI(tk.Tk):
         # every package" (cfg.only_packages stays None), the exact opposite
         # of what "None" in the GUI is supposed to mean. --no-default-
         # packages is the real "install none of the optional ones" flag.
-        if PACKAGE_CATALOG:
+        if self._pkg_selected:
             selected = self._selected_package_names()
             if not selected:
                 cmd.append("--no-default-packages")
-            elif len(selected) < len(PACKAGE_CATALOG):
+            elif len(selected) < len(self._pkg_selected):
                 for name in selected:
                     cmd += ["--only-package", name]
+
+        # Та же логика, что у пакетов выше (включая NAJDENNYJ BUG) — пустой
+        # --driver-цикл без --no-drivers означало бы "ядро само решит",
+        # то есть "поставить все", обратное тому, что значит "ничего не
+        # выбрано" в GUI.
+        if self.driver_vars:
+            selected_drivers = [name for name, var in self.driver_vars.items() if var.get()]
+            if not selected_drivers:
+                cmd.append("--no-drivers")
+            elif len(selected_drivers) < len(self.driver_vars):
+                for name in selected_drivers:
+                    cmd += ["--driver", name]
 
         self._launch(cmd, subcommand)
 

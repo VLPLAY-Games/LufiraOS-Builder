@@ -49,6 +49,13 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    metavar="NAME",
                    help="install only this default package (by name, may be repeated) instead of "
                         "all of them; overrides --no-default-packages")
+    p.add_argument("--no-drivers", action="store_false", dest="install_drivers",
+                   help="don't install any userspace driver daemon (netd/soundd, see "
+                        "config.DRIVER_PACKAGES) — the image boots with no network/sound support")
+    p.add_argument("--driver", action="append", dest="only_drivers", default=None,
+                   metavar="NAME", choices=config.DRIVER_PACKAGES,
+                   help="install only this userspace driver daemon (by name, may be repeated) "
+                        "instead of all of them; overrides --no-drivers")
     p.add_argument("--lufira-packages-repo", type=Path,
                    default=_app_root().parent / config.LUFIRA_PACKAGES_REPO,
                    help="path to the lufira-packages repository (only used with "
@@ -85,6 +92,8 @@ def make_config(args) -> config.BuildConfig:
         boot_mode=args.boot_mode,
         install_default_packages=args.install_default_packages,
         only_packages=set(args.only_packages) if args.only_packages else None,
+        install_drivers=args.install_drivers,
+        only_drivers=set(args.only_drivers) if args.only_drivers else None,
         bios_path=args.bios_path,
         audio=args.audio,
         net_device=args.net_device,
@@ -145,11 +154,25 @@ def do_build(args) -> config.BuildConfig:
         # pointing cfg.lufira_packages_repo there needs no change to image.py.
         cfg.lufira_packages_repo = runtime_root
 
+    # Драйверы (netd/soundd) отобраны отдельным разделом --driver/--no-drivers
+    # (аналогично --only-package/--no-default-packages, но независимо от
+    # них — драйвер не "обычный" пакет, см. config.DRIVER_PACKAGES) — делим
+    # default_lpgs на две группы и фильтруем каждую своей парой флагов.
+    driver_names = set(config.DRIVER_PACKAGES)
+    driver_lpgs = [p for p in default_lpgs if p.stem in driver_names]
+    other_lpgs = [p for p in default_lpgs if p.stem not in driver_names]
+
     if cfg.only_packages is not None:
-        default_lpgs = [p for p in default_lpgs if p.stem in cfg.only_packages]
-        cfg.packages = [str(p) for p in default_lpgs] + cfg.packages
-    elif cfg.install_default_packages:
-        cfg.packages = [str(p) for p in default_lpgs] + cfg.packages
+        other_lpgs = [p for p in other_lpgs if p.stem in cfg.only_packages]
+    elif not cfg.install_default_packages:
+        other_lpgs = []
+
+    if cfg.only_drivers is not None:
+        driver_lpgs = [p for p in driver_lpgs if p.stem in cfg.only_drivers]
+    elif not cfg.install_drivers:
+        driver_lpgs = []
+
+    cfg.packages = [str(p) for p in other_lpgs + driver_lpgs] + cfg.packages
 
     print("=== Assembling disk image ===")
     disk_img = image.assemble(cfg, host_tools["mkfs_lufirafs"], bootx64_efi, kernel_bin, legacy_boot_bins)

@@ -66,6 +66,15 @@ AUDIO_CHOICES = ("ac97", "hda", "none")
 NET_CHOICES = ("rtl8139", "e1000", "e1000e", "none")
 DISK_CHOICES = ("ide", "ahci", "nvme")
 
+# Userspace-драйверы (0.9.5: сеть/звук вынесены из ядра в отдельные
+# root-демоны — netd/soundd, lufira-packages/daemons/) — обычные .lpg
+# пакеты категории "daemons" в lufira-packages/build.py, но в Builder
+# выделены в собственный раздел (CLI --driver/--no-drivers, GUI "Userspace
+# drivers") вместо общего списка пакетов: без них образ грузится, но без
+# сети/звука вообще, это не опциональная утилита вроде ls/cp. Единый
+# источник истины для build.py и gui.py — как AUDIO_CHOICES/NET_CHOICES выше.
+DRIVER_PACKAGES = ("netd", "soundd")
+
 # Package sources (cp/mv/ls/.../dlpg) moved out of LufiraOS/userspace/ into
 # their own lufira-packages repo (own build.py, mirrors lufira-tests) so
 # the kernel repo carries no package source/binaries — see packages.py.
@@ -99,6 +108,10 @@ class BuildConfig:
     # None = install every default package. A set = install only the
     # named ones (--only-package in build.py / GUI checkboxes).
     only_packages: set = None
+    install_drivers: bool = True
+    # None = install every driver in DRIVER_PACKAGES. A set = install only
+    # the named ones (--driver in build.py / GUI "Userspace drivers" checkboxes).
+    only_drivers: set = None
     bios_path: str = None  # override for BIOS_PATH; None = use the auto-detected default
     # Which QEMU device backs each driver subsystem for run/debug/monitor —
     # see AUDIO_CHOICES/NET_CHOICES/DISK_CHOICES above and qemu.py.

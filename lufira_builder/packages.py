@@ -55,9 +55,14 @@ def _fetch_verified(url: str, dest: Path, expected_sha256: str, label: str) -> N
 
 
 def fetch_default_packages_remote(cache_dir: Path) -> tuple:
-    """Returns (list_of_lpg_paths, runtime_root). runtime_root mirrors a
-    lufira-packages checkout's build/ layout (build/shell.elf, build/libc.so)
-    so it can be passed straight through as cfg.lufira_packages_repo."""
+    """Returns (list_of_lpg_paths, runtime_root, categories). runtime_root
+    mirrors a lufira-packages checkout's build/ layout (build/shell.elf,
+    build/libc.so) so it can be passed straight through as
+    cfg.lufira_packages_repo. categories is {package_name: category}, read
+    straight off index.json — the same data gui.py's PACKAGE_CATALOG
+    already shows, now also available to do_build() for --profile
+    (config.resolve_profile_packages()) without a second, driftable copy
+    of "which package is in which category"."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     index_path = cache_dir / "index.json"
     print(f"  fetching {config.LUFIRA_PACKAGES_INDEX_URL}")
@@ -68,10 +73,12 @@ def fetch_default_packages_remote(cache_dir: Path) -> tuple:
     build_dir.mkdir(parents=True, exist_ok=True)
 
     lpgs = []
+    categories = {}
     for pkg in index["packages"]:
         dest = build_dir / f"{pkg['name']}.lpg"
         _fetch_verified(pkg["lpg"], dest, pkg["sha256"], pkg["name"])
         lpgs.append(dest)
+        categories[pkg["name"]] = pkg["category"]
 
     for key, filename in (("shell_elf", "shell.elf"), ("libc_so", "libc.so")):
         entry = index.get(key)
@@ -82,12 +89,13 @@ def fetch_default_packages_remote(cache_dir: Path) -> tuple:
             )
         _fetch_verified(entry["url"], build_dir / filename, entry["sha256"], filename)
 
-    return lpgs, cache_dir
+    return lpgs, cache_dir, categories
 
 
-def fetch_default_packages(lufira_packages_repo: Path, lufira_repo: Path) -> list:
+def fetch_default_packages(lufira_packages_repo: Path, lufira_repo: Path) -> tuple:
     """Builds every package from source in lufira_packages_repo, returns
-    the list of resulting local .lpg paths (by name, via its index.json)."""
+    (list_of_lpg_paths, categories) — see fetch_default_packages_remote()'s
+    docstring for what categories is and why it's returned here too."""
     build_py = lufira_packages_repo / "build.py"
     # cwd matters: build.py's own --out-dir/index.json paths are relative
     # to wherever it runs, not to this file.
@@ -95,4 +103,6 @@ def fetch_default_packages(lufira_packages_repo: Path, lufira_repo: Path) -> lis
 
     index = json.loads((lufira_packages_repo / "index.json").read_text())
     build_dir = lufira_packages_repo / "build"
-    return [build_dir / f"{pkg['name']}.lpg" for pkg in index["packages"]]
+    lpgs = [build_dir / f"{pkg['name']}.lpg" for pkg in index["packages"]]
+    categories = {pkg["name"]: pkg["category"] for pkg in index["packages"]}
+    return lpgs, categories

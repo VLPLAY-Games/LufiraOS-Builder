@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lufira_builder import config, image, packages, qemu, tests, tools
+from lufira_builder import config, flash, image, iso, packages, qemu, tests, tools
 
 
 def _app_root() -> Path:
@@ -49,6 +49,12 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
                    metavar="NAME",
                    help="install only this default package (by name, may be repeated) instead of "
                         "all of them; overrides --no-default-packages")
+    p.add_argument("--profile", choices=config.INSTALL_PROFILE_CHOICES, default=None,
+                   help="install one of the named profiles instead of picking packages by hand: "
+                        "minimal (base only), minimal_wm (base + wm + settings + terminal), "
+                        "full (every package except doom) — drivers (netd/soundd) are unaffected, "
+                        "see --no-drivers/--driver. Mutually exclusive with --only-package/"
+                        "--no-default-packages.")
     p.add_argument("--no-drivers", action="store_false", dest="install_drivers",
                    help="don't install any userspace driver daemon (netd/soundd, see "
                         "config.DRIVER_PACKAGES) — the image boots with no network/sound support")
@@ -92,6 +98,7 @@ def make_config(args) -> config.BuildConfig:
         boot_mode=args.boot_mode,
         install_default_packages=args.install_default_packages,
         only_packages=set(args.only_packages) if args.only_packages else None,
+        profile=args.profile,
         install_drivers=args.install_drivers,
         only_drivers=set(args.only_drivers) if args.only_drivers else None,
         bios_path=args.bios_path,
@@ -103,6 +110,10 @@ def make_config(args) -> config.BuildConfig:
 
 def do_build(args) -> config.BuildConfig:
     cfg = make_config(args)
+
+    if cfg.profile is not None and (cfg.only_packages is not None or not cfg.install_default_packages):
+        sys.exit("error: --profile is mutually exclusive with --only-package/--no-default-packages "
+                 "— a profile already decides which default packages to install")
 
     # Пользователь: "сборщик сам всё подтянет" — LufiraOS нужен ВСЕГДА
     # (ядро собирается только локально, готового релиза ядра нет и не
@@ -144,15 +155,19 @@ def do_build(args) -> config.BuildConfig:
     if args.build_packages_from_source:
         tools.ensure_repo(args.lufira_packages_repo, config.LUFIRA_PACKAGES_GIT_URL, "lufira-packages")
         print(f"=== Building lufira-packages from source ({args.lufira_packages_repo}) ===")
-        default_lpgs = packages.fetch_default_packages(args.lufira_packages_repo, cfg.lufira_repo)
+        default_lpgs, pkg_categories = packages.fetch_default_packages(args.lufira_packages_repo, cfg.lufira_repo)
     else:
         print("=== Fetching lufira-packages release (prebuilt .lpg via index.json) ===")
         cache_dir = cfg.out_dir / "packages_cache"
-        default_lpgs, runtime_root = packages.fetch_default_packages_remote(cache_dir)
+        default_lpgs, runtime_root, pkg_categories = packages.fetch_default_packages_remote(cache_dir)
         # fetch_default_packages_remote() lays cache_dir out in the same
         # shape image.py expects (build/shell.elf, build/libc.so), so
         # pointing cfg.lufira_packages_repo there needs no change to image.py.
         cfg.lufira_packages_repo = runtime_root
+
+    if cfg.profile is not None:
+        cfg.only_packages = config.resolve_profile_packages(cfg.profile, pkg_categories)
+        print(f"=== Profile '{cfg.profile}' selects: {', '.join(sorted(cfg.only_packages))} ===")
 
     # Драйверы (netd/soundd) отобраны отдельным разделом --driver/--no-drivers
     # (аналогично --only-package/--no-default-packages, но независимо от
@@ -208,6 +223,96 @@ def cmd_monitor(args) -> None:
     qemu.qemu_monitor(cfg)
 
 
+def cmd_iso(args) -> None:
+    cfg = do_build(args)
+    out_path = args.out_iso or (cfg.out_dir / "lufiraos-installer.iso")
+    print("=== Building installer ISO ===")
+    result = iso.build_iso(cfg, Path(out_path))
+    print(f"ISO created: {result}")
+    print("WARNING: neither the UEFI nor the legacy BIOS boot path has been confirmed to actually "
+          "boot from this ISO yet (fails with a FAT read error under QEMU+OVMF) — see "
+          "lufira_builder/iso.py's module docstring. Needs the bootloader rework (see README/plan, "
+          "\"superfloppy\"/whole-image-read) before this is a real installer medium.")
+
+
+def cmd_flash_list(args) -> None:
+    devices = flash.list_removable_devices()
+    if not devices:
+        print("No removable devices found (lsblk missing, or none plugged in).")
+        return
+    for d in devices:
+        mp = f" mounted at {', '.join(d['mountpoints'])}" if d["mountpoints"] else ""
+        print(f"  {d['path']:<14} {d['size_human']:>8}  {d['model']}{mp}")
+
+
+def cmd_flash_write(args) -> None:
+    image_path = Path(args.image)
+    if not image_path.exists():
+        sys.exit(f"error: {image_path} not found")
+
+    devices = {d["path"]: d for d in flash.list_removable_devices()}
+    info = devices.get(args.device)
+    if info is None and not args.force:
+        sys.exit(f"error: {args.device} is not a recognized removable device (lsblk RM=1) — "
+                  f"pass --force only if you are certain this is the right drive")
+
+    size_line = f" ({info['size_human']}, {info['model']})" if info else " (--force, unverified device)"
+    print(f"About to overwrite EVERYTHING on {args.device}{size_line} with {image_path}.")
+    if not args.yes:
+        answer = input("Type the device path again to confirm: ").strip()
+        if answer != args.device:
+            print("Aborted — input did not match.")
+            return
+
+    def _progress(line):
+        print(line, end="", flush=True)
+
+    flash.write_image(image_path, args.device, force=args.force, progress_cb=_progress)
+    print(f"\ndone: {image_path} -> {args.device}")
+
+
+def cmd_doctor(args) -> None:
+    """Preflight: проверяет, что все внешние тулы на месте (нужно
+    особенно на свежей системе — v1.0.0 план, этап 2). --yes ставит
+    недостающее через `sudo apt-get install` без вопроса (для
+    неинтерактивных вызовов, напр. из будущего CI); без --yes спрашивает
+    один раз перед sudo, ровно как обычный `apt install` попросил бы."""
+    rows = tools.check_tools()
+    missing = tools.missing_tools(rows)
+
+    width = max(len(r["name"]) for r in rows)
+    for r in rows:
+        mark = "OK  " if r["found"] else ("MISSING (optional)" if not r["required"] else "MISSING")
+        print(f"  {r['name']:<{width}}  {mark:<20} {r['reason']}")
+
+    if not missing:
+        print("\ndoctor: все найдено, можно собирать.")
+        return
+
+    required_missing = [r for r in missing if r["required"]]
+    print(f"\ndoctor: не найдено {len(missing)} из {len(rows)}"
+          + (f", включая {len(required_missing)} обязательных" if required_missing else " (все опциональные)"))
+
+    if missing[0]["apt_pkg"] == "ovmf" and len(missing) == 1:
+        pass  # ovmf отдельно обрабатывается ниже тем же путём, просто пояснение не нужно
+    pkgs = sorted({r["apt_pkg"] for r in missing})
+    print(f"Пакеты (apt): {' '.join(pkgs)}")
+
+    if not args.yes:
+        answer = input("Поставить через `sudo apt-get install -y ...` сейчас? [y/N] ").strip().lower()
+        if answer not in ("y", "yes", "д", "да"):
+            print("Пропущено — поставь вручную и перезапусти doctor.")
+            return
+    if not tools.install_missing(missing):
+        print("apt-get не найден (не Ubuntu/Debian) — поставь вручную через свой пакетный менеджер: "
+              + " ".join(pkgs))
+        return
+    print("\ndoctor: повторная проверка после установки —")
+    for r in tools.check_tools():
+        if r["apt_pkg"] in pkgs:
+            print(f"  {r['name']:<{width}}  {'OK' if r['found'] else 'ещё MISSING'}")
+
+
 def cmd_clear(args) -> None:
     """Guaranteed from-scratch rebuild: `make clean` in LufiraOS (removes
     kernel.bin/BOOTX64.EFI/*.o) plus this repo's --out-dir. lufira-packages
@@ -245,6 +350,30 @@ def main() -> None:
     p_monitor = sub.add_parser("monitor", help="assemble and launch QEMU with the HMP monitor (like `make monitor`)")
     add_common_args(p_monitor)
     p_monitor.set_defaults(func=cmd_monitor)
+
+    p_iso = sub.add_parser("iso", help="assemble disk.img and wrap it as a hybrid UEFI+BIOS installer ISO "
+                                        "(UEFI boot confirmed working; BIOS boot from the ISO is experimental)")
+    add_common_args(p_iso)
+    p_iso.add_argument("--out-iso", type=Path, default=None,
+                        help="output .iso path (default: <out-dir>/lufiraos-installer.iso)")
+    p_iso.set_defaults(func=cmd_iso)
+
+    p_flash_list = sub.add_parser("flash-list", help="list removable (USB) devices disk.img/the ISO could be written to")
+    p_flash_list.set_defaults(func=cmd_flash_list)
+
+    p_flash = sub.add_parser("flash", help="write a disk.img/ISO straight to a USB device (DESTRUCTIVE — overwrites the whole device)")
+    p_flash.add_argument("--image", required=True, type=Path, help="path to disk.img or an installer .iso")
+    p_flash.add_argument("--device", required=True, help="target block device, e.g. /dev/sdb (see `flash-list`)")
+    p_flash.add_argument("--force", action="store_true",
+                          help="write even if the device isn't recognized as removable by lsblk — dangerous")
+    p_flash.add_argument("--yes", action="store_true",
+                          help="skip the interactive confirmation (type-the-device-path-back) prompt")
+    p_flash.set_defaults(func=cmd_flash_write)
+
+    p_doctor = sub.add_parser("doctor", help="check that all external tools (gcc/nasm/mkfs.fat/qemu/xorriso/...) are installed")
+    p_doctor.add_argument("--yes", action="store_true",
+                           help="install missing packages via `sudo apt-get install -y` without asking")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     p_clear = sub.add_parser("clear", help="remove all build output (LufiraOS `make clean` + --out-dir) for a from-scratch rebuild")
     p_clear.add_argument("--lufira-repo", type=Path,

@@ -86,6 +86,41 @@ DISK_CHOICES = ("ide", "ahci", "nvme")
 # источник истины для build.py и gui.py — как AUDIO_CHOICES/NET_CHOICES выше.
 DRIVER_PACKAGES = ("netd", "soundd")
 
+# Профили установки (v1.0.0, установщик + Builder, этап 1) — ПРАВИЛО над
+# категориями/именами пакетов из реального index.json lufira-packages
+# (categories-аргумент fetch_default_packages()/fetch_default_packages_remote()
+# в packages.py), а не отдельный захардкоженный список пакетов — новый
+# пакет категории "base"/"apps" подхватится сам, без правок этого файла.
+#
+# Драйверы (netd/soundd, DRIVER_PACKAGES выше) ни в один профиль НЕ входят
+# — они остаются уже существующим отдельным выбором (install_drivers/
+# only_drivers), независимым от профиля: тот же набор, что ставит обычная
+# полная сборка уже сегодня. "full" ниже — это "все пакеты, кроме
+# драйверов и категории games"; при драйверах по умолчанию включёнными
+# (install_drivers=True) результат совпадает с "все пакеты кроме дума", но
+# снятая галочка с конкретного драйвера работает как и раньше — профиль её
+# не отменяет и не включает обратно.
+INSTALL_PROFILE_CHOICES = ("minimal", "minimal_wm", "full")
+
+
+def resolve_profile_packages(profile: str, pkg_categories: dict) -> set:
+    """pkg_categories: {package_name: category}, т.е. ровно то, что
+    возвращают fetch_default_packages()/fetch_default_packages_remote() в
+    packages.py. Возвращает множество ИМЁН пакетов (без драйверов, без
+    games), которое профиль ставит — используется build.py как
+    cfg.only_packages."""
+    if profile == "minimal":
+        return {name for name, cat in pkg_categories.items() if cat == "base"}
+    if profile == "minimal_wm":
+        base = {name for name, cat in pkg_categories.items() if cat == "base"}
+        extra = {"wm", "settings", "terminal"} & set(pkg_categories)
+        return base | extra
+    if profile == "full":
+        driver_names = set(DRIVER_PACKAGES)
+        return {name for name, cat in pkg_categories.items()
+                if cat != "games" and name not in driver_names}
+    raise ValueError(f"unknown install profile: {profile!r}")
+
 # Package sources (cp/mv/ls/.../dlpg) moved out of LufiraOS/userspace/ into
 # their own lufira-packages repo (own build.py, mirrors lufira-tests) so
 # the kernel repo carries no package source/binaries — see packages.py.
@@ -119,6 +154,12 @@ class BuildConfig:
     # None = install every default package. A set = install only the
     # named ones (--only-package in build.py / GUI checkboxes).
     only_packages: set = None
+    # None = no profile (--only-package/--no-default-packages decide as
+    # before). One of INSTALL_PROFILE_CHOICES resolves to only_packages via
+    # resolve_profile_packages() in do_build() — see build.py, mutually
+    # exclusive with --only-package/--no-default-packages (do_build()
+    # errors out if both are given, instead of picking one silently).
+    profile: str = None
     install_drivers: bool = True
     # None = install every driver in DRIVER_PACKAGES. A set = install only
     # the named ones (--driver in build.py / GUI "Userspace drivers" checkboxes).

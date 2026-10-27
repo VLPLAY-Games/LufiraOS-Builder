@@ -10,8 +10,79 @@ kernel/fs/lufirafs/lufirafs_format.h via a relative path — duplicating
 that header here would risk drift); the builder just compiles it in place.
 """
 
+import platform
+import shutil
 import subprocess
 from pathlib import Path
+
+from . import config
+
+# Внешние программы, которые реально зовутся где-то в этом пайплайне (grep
+# подтверждён: Makefile LufiraOS — gcc/ld/objcopy/nasm; этот репозиторий —
+# git/dd/mkfs.fat/mmd/mcopy/qemu-system-x86_64/xorriso). "required=False" —
+# нужно только для опциональных путей (--legacy-bios, сборка ISO), их
+# отсутствие не блокирует обычный build/run.
+# apt — потому что это единственный пакетный менеджер, под который этот
+# список реально проверялся (Ubuntu/Debian); на других дистрибутивах
+# doctor просто покажет имя бинаря без готовой команды установки.
+REQUIRED_TOOLS = [
+    ("git", "git", "клонирование sibling-репозиториев (LufiraOS/lufira-packages)"),
+    ("make", "make", "сборка ядра/загрузчика (LufiraOS Makefile)"),
+    ("gcc", "gcc", "сборка ядра и host-тула mkfs_lufirafs"),
+    ("ld", "binutils", "линковка ядра"),
+    ("objcopy", "binutils", "превращение ELF ядра в kernel.bin"),
+    ("mkfs.fat", "dosfstools", "форматирование ESP (FAT12) внутри disk.img"),
+    ("mmd", "mtools", "запись EFI/BOOT/BOOTX64.EFI и kernel.bin в ESP"),
+    ("mcopy", "mtools", "то же самое, см. mmd"),
+    ("dd", "coreutils", "создание/патчинг disk.img, esp.img, usbstick.img"),
+    ("qemu-system-x86_64", "qemu-system-x86", "run/debug/monitor"),
+]
+OPTIONAL_TOOLS = [
+    ("nasm", "nasm", "--legacy-bios (boot_legacy/ в LufiraOS, make bootloader-bios)"),
+    ("xorriso", "xorriso", "сборка installer-ISO (build iso)"),
+]
+
+
+def _apt_available() -> bool:
+    return shutil.which("apt-get") is not None
+
+
+def check_tools() -> list:
+    """Возвращает список {name, apt_pkg, reason, required, found} — found
+    через shutil.which(name), плюс отдельная псевдо-запись "ovmf" (не
+    бинарь, а файл прошивки — см. config.BIOS_PATH/_OVMF_CANDIDATES),
+    нужная только для run/debug/monitor с --boot-mode uefi (umолчание)."""
+    rows = []
+    for name, apt_pkg, reason in REQUIRED_TOOLS:
+        rows.append({"name": name, "apt_pkg": apt_pkg, "reason": reason,
+                     "required": True, "found": shutil.which(name) is not None})
+    for name, apt_pkg, reason in OPTIONAL_TOOLS:
+        rows.append({"name": name, "apt_pkg": apt_pkg, "reason": reason,
+                     "required": False, "found": shutil.which(name) is not None})
+    rows.append({
+        "name": "OVMF firmware", "apt_pkg": "ovmf", "reason": "UEFI-прошивка для QEMU (--boot-mode uefi)",
+        "required": False, "found": any(Path(p).exists() for p in config._OVMF_CANDIDATES),
+    })
+    return rows
+
+
+def missing_tools(rows: list = None) -> list:
+    rows = rows if rows is not None else check_tools()
+    return [r for r in rows if not r["found"]]
+
+
+def install_missing(rows: list) -> bool:
+    """Ставит apt_pkg всех строк в rows через `sudo apt-get install -y`.
+    Вызывающий отвечает за то, что пользователь уже подтвердил это (см.
+    `doctor` в build.py — отдельный явный y/N перед sudo, не отсюда).
+    Возвращает False без изменений, если apt-get недоступен (другой
+    дистрибутив) — тогда вызывающий сам печатает имена пакетов."""
+    if not _apt_available():
+        return False
+    pkgs = sorted({r["apt_pkg"] for r in rows})
+    subprocess.run(["sudo", "apt-get", "update"], check=True)
+    subprocess.run(["sudo", "apt-get", "install", "-y", *pkgs], check=True)
+    return True
 
 
 def _checkout_latest_release_tag(path: Path, label: str) -> None:

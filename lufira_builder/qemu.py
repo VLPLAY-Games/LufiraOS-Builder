@@ -74,6 +74,17 @@ def _common_prefix(cfg: config.BuildConfig) -> list:
         # flag ("invalid accelerator kvm:tcg" on this QEMU version). "pc" is
         # QEMU's own default machine type — this doesn't change the chipset.
         "-machine", "pc,accel=kvm:tcg",
+        # kvm-pit (реально используется, когда accel выше выбрал именно kvm)
+        # по умолчанию lost_tick_policy="delay": "потерянные" тики (гость не
+        # успел ack'нуть IRQ0 вовремя — например, во время apic_init()/
+        # mmio_map() на старте или просто под нагрузкой в думе) не
+        # отбрасываются, а довозятся позже ПАЧКОЙ, догоняя "упущенное" время —
+        # отсюда pit_ticks (kernel/system/timer/pit.c) идёт быстрее настоящих
+        # 100 Гц, и всё, что на нём завязано (DOOM: DG_GetTicksMs() в
+        # doomgeneric_lufira.c, sys_msleep и т.д.), ощутимо убегает вперёд
+        # реального времени. "discard" — тики без ack просто пропадают, без
+        # компенсирующих пачек догона.
+        "-global", "kvm-pit.lost_tick_policy=discard",
     ]
     # boot_mode="bios" omits -bios entirely so QEMU falls back to its
     # built-in SeaBIOS (legacy/CSM boot) instead of OVMF (UEFI) — the same

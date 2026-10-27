@@ -115,6 +115,12 @@ def do_build(args) -> config.BuildConfig:
         sys.exit("error: --profile is mutually exclusive with --only-package/--no-default-packages "
                  "— a profile already decides which default packages to install")
 
+    # v1.0.0 план, этап 2: проверка зависимостей сама по себе, при каждой
+    # сборке — не отдельная команда doctor, которую надо не забыть
+    # запустить вручную. nasm нужен только если реально просят
+    # --legacy-bios (иначе make bootloader-bios даже не вызывается).
+    tools.preflight_check(also_required=("nasm",) if cfg.legacy_bios else ())
+
     # Пользователь: "сборщик сам всё подтянет" — LufiraOS нужен ВСЕГДА
     # (ядро собирается только локально, готового релиза ядра нет и не
     # планируется), независимо от режима получения пакетов ниже.
@@ -224,6 +230,7 @@ def cmd_monitor(args) -> None:
 
 
 def cmd_iso(args) -> None:
+    tools.preflight_check(also_required=("xorriso",))
     cfg = do_build(args)
     out_path = args.out_iso or (cfg.out_dir / "lufiraos-installer.iso")
     print("=== Building installer ISO ===")

@@ -15,19 +15,36 @@ from pathlib import Path
 # kernel later reads (the same risk that used to be flagged directly in
 # the Makefile).
 #
-# Back to 16 MiB (12 MiB LufiraFS region) — briefly tried 32/64 MiB while
-# chasing "dlpg install doom" failures, but disk space was never the real
-# issue (confirmed at 64 MiB/60 MiB-free-region, which still failed the
-# same way). The two actual bugs were (1) LUFIRAFS_MAX_FILE_SIZE being
-# smaller than doom.lpg — fixed via LUFIRAFS_BLOCK_SIZE in
-# lufirafs_format.h — and (2) dlpg install never creating a file's parent
-# directory (/usr/share didn't exist on an image that never had doom
-# baked in at build time, where mkfs_lufirafs's ensure_dir_path() would
-# have created it for free) — fixed via ensure_parent_dirs() in
-# lufira-packages/base/dlpg.c.
-DISK_TOTAL_SIZE = 16 * 1024 * 1024
+# 12 MiB LufiraFS region — briefly tried 32/64 MiB while chasing "dlpg
+# install doom" failures, but disk space was never the real issue
+# (confirmed at 64 MiB/60 MiB-free-region, which still failed the same
+# way). The two actual bugs were (1) LUFIRAFS_MAX_FILE_SIZE being smaller
+# than doom.lpg — fixed via LUFIRAFS_BLOCK_SIZE in lufirafs_format.h —
+# and (2) dlpg install never creating a file's parent directory
+# (/usr/share didn't exist on an image that never had doom baked in at
+# build time) — fixed via ensure_parent_dirs() in lufira-packages/base/dlpg.c.
+#
+# v1.0.0 план — переход с "суперфлоппи" (голый FAT12 прямо в LBA0, весь
+# диск читается в RAM одним куском при загрузке, см. README/CHANGELOG) на
+# настоящую MBR-таблицу разделов: LBA0 — MBR (boot-код + 2 партиции),
+# дальше ESP_GAP_SIZE байт "зазора" под stage2/legacy_main/копию kernel.bin
+# для legacy BIOS (см. legacy_boot.py — раньше это были "-R reserved
+# sectors" внутри самой FAT12, теперь честное место ДО первой партиции,
+# как у GRUB), затем партиция 1 (ESP, тип 0xEF, FAT12 — то же самое
+# содержимое, что и раньше) и партиция 2 (LufiraFS, тип 0xDA "non-fs
+# data" — ни BIOS, ни UEFI, ни сторонние ОС её трогать не должны).
+# ЕДИНИЦЫ ИЗМЕРЕНИЯ ОСТАЮТСЯ ТЕМИ ЖЕ (ESP_SIZE/REGION_SIZE — байты самих
+# партиций), просто общий размер диска вырос на ESP_GAP_SIZE.
+ESP_GAP_SIZE = 2 * 1024 * 1024  # MBR-зазор под legacy-загрузчик, см. legacy_boot.py
 ESP_SIZE = 4 * 1024 * 1024
-REGION_SIZE = DISK_TOTAL_SIZE - ESP_SIZE
+REGION_SIZE = 12 * 1024 * 1024
+DISK_TOTAL_SIZE = ESP_GAP_SIZE + ESP_SIZE + REGION_SIZE
+
+ESP_PARTITION_START = ESP_GAP_SIZE               # байт, начало партиции 1 (ESP)
+LUFIRAFS_PARTITION_START = ESP_GAP_SIZE + ESP_SIZE  # байт, начало партиции 2 (LufiraFS)
+
+MBR_PARTITION_TYPE_ESP = 0xEF
+MBR_PARTITION_TYPE_LUFIRAFS = 0xDA  # "Non-FS data" — зарегистрированный, но ничем не монтируемый тип
 
 # Directories created in the LufiraFS region on every image build.
 DEFAULT_DIRS = ["/system", "/logs", "/etc", "/bin", "/lib"]
@@ -145,6 +162,7 @@ class BuildConfig:
     lufira_packages_repo: Path
     out_dir: Path
     disk_total_size: int = DISK_TOTAL_SIZE
+    esp_gap_size: int = ESP_GAP_SIZE
     esp_size: int = ESP_SIZE
     packages: list = field(default_factory=list)  # list of paths to .lpg files
     build_kernel: bool = True
@@ -173,7 +191,17 @@ class BuildConfig:
 
     @property
     def region_size(self) -> int:
-        return self.disk_total_size - self.esp_size
+        return self.disk_total_size - self.esp_gap_size - self.esp_size
+
+    @property
+    def esp_partition_start(self) -> int:
+        """Байт, начало партиции 1 (ESP) — сразу после MBR-зазора."""
+        return self.esp_gap_size
+
+    @property
+    def lufirafs_partition_start(self) -> int:
+        """Байт, начало партиции 2 (LufiraFS) — сразу после ESP."""
+        return self.esp_gap_size + self.esp_size
 
     @property
     def effective_bios_path(self) -> str:

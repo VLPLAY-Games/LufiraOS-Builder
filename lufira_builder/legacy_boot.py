@@ -1,23 +1,19 @@
-"""Legacy BIOS boot support — patches a stage1/stage2/legacy_main chain
-into the very same ESP FAT12 "superfloppy" image that UEFI already boots
-from directly (build_esp() in image.py just dd's it into disk.img at
-offset 0, no partition table at all).
+"""Legacy BIOS boot support — v1.0.0 план: раньше stage1 жил в FAT12-
+boot-секторе на LBA0 (суперфлоппи, никакой таблицы разделов не было), а
+stage2/legacy_main/kernel.bin — в секторах, зарезервированных внутри самой
+FAT12 через `mkfs.fat -R` (чтобы FAT их не трогала). Теперь LBA0 — настоящий
+MBR (см. image.py:_write_mbr(), партиции 0xEF/0xDA), а stage1 патчится
+ТОЛЬКО в boot-код область MBR (0x000-0x1BD, 446 байт — partition table и
+0x55AA НЕ трогаем, их уже записал _write_mbr()); stage2/legacy_main/
+kernel.bin лежат в "зазоре" ДО первой партиции (LBA 1..GAP_SECTORS-1,
+config.ESP_GAP_SIZE) — та же идея, что у GRUB ("MBR gap"), просто сырые
+абсолютные LBA внутри disk.img, без какой-либо файловой системы.
 
-A FAT12 boot sector has the exact same 512-byte / 0x55AA shape as a
-classic MBR: bytes 0x00-0x3D are the BPB (must stay exactly what mkfs.fat
-wrote — EB 3C 90 jump included, it already points straight at 0x3E) and
-bytes 0x3E-0x1FD (448 bytes) are free bootstrap-code space. We patch our
-own stage1 in there. stage1 then loads stage2 (and stage2 in turn loads
-legacy_main + kernel.bin + the whole disk) from sectors reserved via
-`mkfs.fat -R` — sectors that are guaranteed to never be touched by the
-FAT filesystem itself (not part of the FAT tables, root dir, or data
-area), so this coexists safely with the normal FAT12 content (BOOTX64.EFI,
-/kernel.bin) used by the UEFI path.
-
-All the LBA/size constants below MUST stay in sync with LufiraOS/
-boot_legacy/layout.inc — see the detailed comment there. Two sources of
-truth instead of one is the weak point of this whole scheme; there's no
-clean way to share a single header between NASM and Python.
+Все LBA/размерные константы ниже ОБЯЗАНЫ совпадать с LufiraOS/
+boot_legacy/layout.inc — см. подробный комментарий там. Два источника
+истины вместо одного — слабое место этой схемы, общий с остальным этим
+файлом приём (нет чистого способа шарить один заголовок между NASM и
+Python).
 """
 
 import struct
@@ -31,62 +27,54 @@ LEGACY_MAIN_MAX_SECTORS = 32
 
 KERNEL_HEADER_LBA = LEGACY_MAIN_LBA + LEGACY_MAIN_MAX_SECTORS      # 97
 KERNEL_MAGIC = 0x524B464C  # 'LFKR', little-endian in memory
-KERNEL_MAX_SECTORS = 4094
-
-RESERVED_SECTORS = KERNEL_HEADER_LBA + 1 + KERNEL_MAX_SECTORS      # 4192
+KERNEL_MAX_SECTORS = 3998
 
 SECTOR_SIZE = 512
-BOOT_CODE_OFFSET = 0x3E
-BOOT_CODE_MAX_LEN = SECTOR_SIZE - BOOT_CODE_OFFSET - 2  # 448, up to the 0x55AA signature
+BOOT_CODE_OFFSET = 0x000
+BOOT_CODE_MAX_LEN = 0x1BE  # 446 байт — до начала таблицы разделов (0x1BE)
 
 
-def _write_at_lba(data: bytearray, lba: int, blob: bytes, max_sectors: int, label: str) -> None:
+def _write_at_lba(f, lba: int, blob: bytes, max_sectors: int, label: str) -> None:
     max_bytes = max_sectors * SECTOR_SIZE
     if len(blob) > max_bytes:
         raise ValueError(
             f"{label} is {len(blob)} bytes, exceeds its reserved budget of {max_bytes} bytes — "
             f"bump the matching *_MAX_SECTORS in both boot_legacy/layout.inc and this file"
         )
-    offset = lba * SECTOR_SIZE
-    if offset + len(blob) > len(data):
-        raise ValueError(f"{label} would write past the end of the ESP image — esp_size too small")
-    data[offset:offset + len(blob)] = blob
+    f.seek(lba * SECTOR_SIZE)
+    f.write(blob)
 
 
-def patch_esp(esp_img: Path, stage1_bin: Path, stage2_bin: Path,
-              legacy_main_bin: Path, kernel_bin: Path) -> None:
-    """Patches an already-formatted (mkfs.fat -R >= RESERVED_SECTORS) ESP
-    image in place: embeds stage1 into the boot sector's bootstrap-code
-    region, and stage2/legacy_main/kernel.bin into the reserved sectors
-    right after it. Call this AFTER mcopy has written BOOTX64.EFI/
-    kernel.bin into the FAT12 filesystem (order doesn't actually matter —
-    reserved sectors are outside the FAT area — but matching build_esp()'s
-    existing step order keeps things easy to follow)."""
-    data = bytearray(esp_img.read_bytes())
-
+def patch_mbr_gap(disk_img: Path, stage1_bin: Path, stage2_bin: Path,
+                   legacy_main_bin: Path, kernel_bin: Path) -> None:
+    """disk_img уже содержит правильный MBR (_write_mbr() в image.py уже
+    отработала — partition table и 0x55AA на месте) и правильный общий
+    размер (достаточно большой, чтобы вместить зазор + обе партиции).
+    Патчит ТОЛЬКО boot-код MBR + сырые LBA зазора, ничего больше в файле
+    не трогает."""
     stage1 = stage1_bin.read_bytes()
     if len(stage1) > BOOT_CODE_MAX_LEN:
         raise ValueError(f"stage1.bin is {len(stage1)} bytes, must fit in {BOOT_CODE_MAX_LEN} "
-                          f"(the FAT12 boot sector's bootstrap-code region)")
-    padded = stage1 + bytes(BOOT_CODE_MAX_LEN - len(stage1))
-    data[BOOT_CODE_OFFSET:BOOT_CODE_OFFSET + BOOT_CODE_MAX_LEN] = padded
-    # Bytes 0x00-0x3D (BPB) and 0x1FE-0x1FF (0x55AA signature) are left
-    # exactly as mkfs.fat wrote them.
+                          f"(MBR boot-code area, before the partition table at 0x1BE)")
+    padded_stage1 = stage1 + bytes(BOOT_CODE_MAX_LEN - len(stage1))
 
-    _write_at_lba(data, STAGE2_LBA_START, stage2_bin.read_bytes(), STAGE2_MAX_SECTORS, "stage2.bin")
-    _write_at_lba(data, LEGACY_MAIN_LBA, legacy_main_bin.read_bytes(),
-                  LEGACY_MAIN_MAX_SECTORS, "legacy_main.bin")
+    with disk_img.open("r+b") as f:
+        # read-modify-write: меняем только 0x000-0x1BD, partition table
+        # (0x1BE-0x1FD) и сигнатуру (0x1FE-0x1FF), которые уже на месте,
+        # НЕ трогаем.
+        f.seek(BOOT_CODE_OFFSET)
+        f.write(padded_stage1)
 
-    kernel_bytes = kernel_bin.read_bytes()
-    # Заголовок дополняется нулями до ЦЕЛОГО сектора — stage2.asm читает
-    # его как ровно один сектор (LBA=KERNEL_HEADER_LBA) и начинает данные
-    # ядра СТРОГО со следующего сектора (KERNEL_HEADER_LBA+1), без разбора
-    # байтовых смещений внутри сектора. Без этого паддинга kernel.bin
-    # сдвигался бы на 8 байт и stage2 читал бы не настоящий _start с начала
-    # файла, а байт 504 — ровно это и произошло при живой отладке.
-    header = struct.pack("<II", KERNEL_MAGIC, len(kernel_bytes))
-    header = header + bytes(SECTOR_SIZE - len(header))
-    _write_at_lba(data, KERNEL_HEADER_LBA, header + kernel_bytes,
-                  KERNEL_MAX_SECTORS + 1, "kernel.bin (+ header sector)")
+        _write_at_lba(f, STAGE2_LBA_START, stage2_bin.read_bytes(), STAGE2_MAX_SECTORS, "stage2.bin")
+        _write_at_lba(f, LEGACY_MAIN_LBA, legacy_main_bin.read_bytes(),
+                      LEGACY_MAIN_MAX_SECTORS, "legacy_main.bin")
 
-    esp_img.write_bytes(data)
+        kernel_bytes = kernel_bin.read_bytes()
+        # Заголовок дополняется нулями до ЦЕЛОГО сектора — stage2.asm читает
+        # его как ровно один сектор (LBA=KERNEL_HEADER_LBA) и начинает данные
+        # ядра СТРОГО со следующего сектора (KERNEL_HEADER_LBA+1), без разбора
+        # байтовых смещений внутри сектора.
+        header = struct.pack("<II", KERNEL_MAGIC, len(kernel_bytes))
+        header = header + bytes(SECTOR_SIZE - len(header))
+        _write_at_lba(f, KERNEL_HEADER_LBA, header + kernel_bytes,
+                      KERNEL_MAX_SECTORS + 1, "kernel.bin (+ header sector)")

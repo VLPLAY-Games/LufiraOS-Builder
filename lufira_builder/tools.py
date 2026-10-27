@@ -71,6 +71,66 @@ def missing_tools(rows: list = None) -> list:
     return [r for r in rows if not r["found"]]
 
 
+_ANSI_GREEN = "\033[32m"
+_ANSI_RED = "\033[31m"
+_ANSI_YELLOW = "\033[33m"
+_ANSI_RESET = "\033[0m"
+
+
+def format_tools_report(rows: list) -> str:
+    """Цветной (ANSI SGR — зелёный/красный/жёлтый) отчёт по rows
+    (check_tools()), по одной строке на инструмент. Коды совпадают с тем,
+    что уже парсит gui.py's _ANSI_CSI_RE/_SGR_FG — тот же текст одинаково
+    читается и в реальном терминале, и в логе GUI."""
+    width = max((len(r["name"]) for r in rows), default=4)
+    lines = []
+    for r in rows:
+        if r["found"]:
+            color, mark = _ANSI_GREEN, "OK"
+        elif r["required"]:
+            color, mark = _ANSI_RED, "MISSING"
+        else:
+            color, mark = _ANSI_YELLOW, "missing (optional)"
+        lines.append(f"  {color}{r['name']:<{width}}  {mark:<20}{_ANSI_RESET}  {r['reason']}")
+    return "\n".join(lines)
+
+
+def preflight_check(also_required: tuple = ()) -> None:
+    """Зовётся в начале do_build()/cmd_iso() в build.py (v1.0.0 план,
+    этап 2, запуск "сам себя" — не отдельная ручная команда doctor,
+    которую можно забыть вызвать). also_required — имена из OPTIONAL_TOOLS
+    (напр. "nasm" при --legacy-bios, "xorriso" для `iso`), которые для
+    ЭТОГО конкретного запуска считаются обязательными, даже хотя в целом
+    опциональны.
+
+    Тихо возвращается, если всё нужное для этого запуска на месте — вывод
+    только при реальной проблеме, чтобы не засорять нормальный лог сборки.
+    Останавливает сборку (sys.exit), если не хватает чего-то обязательного
+    (включая also_required); просто предупреждает (не останавливает) про
+    остальные опциональные инструменты."""
+    rows = check_tools()
+    for r in rows:
+        if r["name"] in also_required:
+            r["required"] = True
+
+    missing = missing_tools(rows)
+    if not missing:
+        return
+
+    print("=== Dependency check ===")
+    print(format_tools_report(rows))
+
+    required_missing = [r for r in missing if r["required"]]
+    if required_missing:
+        pkgs = sorted({r["apt_pkg"] for r in required_missing})
+        import sys
+        sys.exit(f"\nerror: missing required tool(s): {', '.join(r['name'] for r in required_missing)} "
+                 f"— install with `sudo apt-get install -y {' '.join(pkgs)}` (or run "
+                 f"`python3 build.py doctor`) and try again")
+
+    print()  # только опциональное недостающее — предупреждение, сборка продолжается
+
+
 def install_missing(rows: list) -> bool:
     """Ставит apt_pkg всех строк в rows через `sudo apt-get install -y`.
     Вызывающий отвечает за то, что пользователь уже подтвердил это (см.
